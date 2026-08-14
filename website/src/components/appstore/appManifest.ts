@@ -153,6 +153,15 @@ export const APP_MANIFEST_KEY: Record<string, ManifestKeys> = {
       'apps.designCritique.manifest.highlight_8',
     ],
   },
+  // `design-tweak` ships no `highlights` (matching `spec-builder`'s precedent
+  // below): app.json declares no `highlights` field, so the App Store card
+  // shows displayName/description/pageLabel only.
+  'design-tweak': {
+    displayName: 'apps.designTweak.manifest.display_name',
+    description: 'apps.designTweak.manifest.description',
+    pageLabel: 'apps.designTweak.manifest.page_label',
+    highlights: [],
+  },
   'dev-fleet': {
     displayName: 'apps.devFleet.manifest.display_name',
     description: 'apps.devFleet.manifest.description',
