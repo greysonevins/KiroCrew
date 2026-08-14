@@ -23,9 +23,9 @@
  * state + token auto-refresh countdown (host SSH expiry lives in the title bar,
  * not duplicated here).
  */
-import { useCallback, useMemo, useState, useSyncExternalStore, Fragment, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, Fragment, type CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Home, Server, Loader2, ChevronDown, Pin } from 'lucide-react'
+import { Home, Loader2, ChevronDown, Pin, Check } from 'lucide-react'
 import { api, ApiError, type InstanceView } from '../api/client'
 import { useAppSelector } from '../store'
 import { type WarmConn } from '../store/instancesSlice'
@@ -39,6 +39,8 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuLabel,
+  DropdownMenuItem,
 } from './ui/dropdown-menu'
 
 import { i18nT } from '../i18n/t'
@@ -87,39 +89,98 @@ const LOCAL_VALUE = '__local__'
 // This module store cannot cross into a remote pane's embedded bar — that runs
 // in a separate cross-origin iframe realm with its own localStorage — so the
 // embedded bar does NOT read this store. Instead the parent relays the pin into
-// each pane via the `expanded` field of `mc-host-model`, and the embedded pin
-// toggle posts `mc-set-expanded` back up; the pin is thus one shared value
-// across every pane (local header + all remote panes), not per-pane.
-const EXPANDED_PREF_KEY = 'mc-crew-switcher-expanded'
+// each pane via the `pinnedCrews` field of `mc-host-model`, and an embedded
+// pin toggle posts `mc-set-crew-pin` back up; the pin set is thus one shared
+// value across every pane (local header + all remote panes), not per-pane.
+const PINNED_PREF_KEY = 'mc-crew-switcher-pinned'
 
-let expandedState: boolean = (() => {
+/** The expand-everything switch this preference replaces. */
+const LEGACY_EXPANDED_PREF_KEY = 'mc-crew-switcher-expanded'
+
+/**
+ * Resolve the pin set from raw stored values, migrating the legacy
+ * expand-everything switch.
+ *
+ * A user who had pinned the switcher open wanted chips, so migrating them to an
+ * EMPTY set would silently collapse the header back to a bare dropdown and read
+ * as the feature having been removed. Local is the one destination guaranteed to
+ * exist (no crew has to be configured for it), so it is the honest floor: they
+ * keep a chip row, and pin the crews they want beside it.
+ *
+ * Pure, and exported, because the module store below reads storage exactly once
+ * at import — a test cannot re-trigger that, so the decision has to be reachable
+ * without it.
+ */
+export function resolvePinnedPref(stored: string | null, legacyExpanded: string | null): string[] {
+  if (stored !== null) {
+    try {
+      const parsed: unknown = JSON.parse(stored)
+      if (!Array.isArray(parsed)) return []
+      return parsed.filter((id): id is string => typeof id === 'string')
+    } catch {
+      // A hand-corrupted value reads as "nothing pinned", never a crash.
+      return []
+    }
+  }
+  if (legacyExpanded !== null) return legacyExpanded === '1' ? [LOCAL_VALUE] : []
+  return []
+}
+
+function readPinned(): Set<string> {
   try {
-    return localStorage.getItem(EXPANDED_PREF_KEY) === '1'
+    const stored = localStorage.getItem(PINNED_PREF_KEY)
+    const legacy = localStorage.getItem(LEGACY_EXPANDED_PREF_KEY)
+    const ids = resolvePinnedPref(stored, legacy)
+    // Land the migration so it runs once — but only DROP the legacy key after the
+    // replacement is durable. Under a full quota the write fails, and removing
+    // first would lose the preference outright with nothing to migrate from on
+    // the next load; leaving the legacy key means the migration simply retries.
+    if (stored === null && legacy !== null) {
+      if (safeSetItem(PINNED_PREF_KEY, JSON.stringify(ids))) {
+        localStorage.removeItem(LEGACY_EXPANDED_PREF_KEY)
+      }
+    }
+    return new Set(ids)
   } catch {
-    return false
+    // Private mode or disabled storage: an unpinned switcher is the safe
+    // fallback, never a throw during module init.
+    return new Set()
   }
-})()
-
-const expandedListeners = new Set<() => void>()
-
-export function setCrewSwitcherExpanded(next: boolean) {
-  if (next === expandedState) return
-  expandedState = next
-  safeSetItem(EXPANDED_PREF_KEY, next ? '1' : '0')
-  expandedListeners.forEach(l => l())
 }
 
-function subscribeExpanded(cb: () => void) {
-  expandedListeners.add(cb)
+let pinnedState: Set<string> = readPinned()
+
+const pinnedListeners = new Set<() => void>()
+
+/**
+ * Replace the pin set and broadcast to every bar in this realm. A fresh Set
+ * identity per write is load-bearing: `useSyncExternalStore` compares snapshots
+ * by reference, so mutating in place would not re-render.
+ */
+export function setCrewPins(ids: Iterable<string>) {
+  pinnedState = new Set(ids)
+  safeSetItem(PINNED_PREF_KEY, JSON.stringify([...pinnedState]))
+  pinnedListeners.forEach(l => l())
+}
+
+/** Pin or unpin one crew (`LOCAL_VALUE` for the local dashboard). */
+export function toggleCrewPin(id: string) {
+  const next = new Set(pinnedState)
+  if (!next.delete(id)) next.add(id)
+  setCrewPins(next)
+}
+
+function subscribePinned(cb: () => void) {
+  pinnedListeners.add(cb)
   return () => {
-    expandedListeners.delete(cb)
+    pinnedListeners.delete(cb)
   }
 }
 
-/** Reactive read of the pin preference + a setter that broadcasts to every bar. */
-export function useCrewSwitcherExpanded(): [boolean, (v: boolean) => void] {
-  const expanded = useSyncExternalStore(subscribeExpanded, () => expandedState, () => expandedState)
-  return [expanded, setCrewSwitcherExpanded]
+/** Reactive read of the pin set + a toggler that broadcasts to every bar. */
+export function useCrewPins(): [Set<string>, (id: string) => void] {
+  const pinned = useSyncExternalStore(subscribePinned, () => pinnedState, () => pinnedState)
+  return [pinned, toggleCrewPin]
 }
 
 /** Parse a `<int>[hm]` TTL (e.g. "20h", "30m") to seconds; 0 if unparseable. */
@@ -231,14 +292,35 @@ export interface SwitcherEntry {
   unread: number
 }
 
-function SwitcherRow({ entry, onSelect }: { entry: SwitcherEntry; onSelect: () => void }) {
+function SwitcherRow({
+  entry,
+  onSelect,
+  pinned,
+  noRoom,
+}: {
+  entry: SwitcherEntry
+  onSelect: () => void
+  /** Pinned out of this menu into a header chip. */
+  pinned: boolean
+  /** Pinned, but the header cut its chip off — see `useClippedChipIds`. */
+  noRoom: boolean
+}) {
   const isLocal = entry.id === null
+  // The pin state rides on the row's own hover/accessible name rather than on the
+  // glyph, because a `title` on a non-interactive span inside a menu item is not
+  // reliably surfaced. `noRoom` has to be sayable: a pinned crew with no visible
+  // chip otherwise looks like the pin silently failed.
+  const pinNote = !pinned
+    ? ''
+    : noRoom
+      ? i18nT('components.instanceTabBar.pinned_no_room')
+      : i18nT('components.instanceTabBar.pinned')
   return (
     <DropdownMenuRadioItem
       value={entry.id ?? LOCAL_VALUE}
       className="gap-2 text-[13px]"
       onSelect={onSelect}
-      title={entry.title}
+      title={pinNote ? `${entry.title} — ${pinNote}` : entry.title}
     >
       {isLocal ? (
         <Home className="lucide-inline shrink-0" />
@@ -274,6 +356,14 @@ function SwitcherRow({ entry, onSelect }: { entry: SwitcherEntry; onSelect: () =
           {stateLabel(entry.state)}
         </span>
       ) : null}
+      {/* Filled = pinned and on screen; dimmed = pinned but cut off. The word is in
+          the row's title, so this is decoration for sighted scanning only. */}
+      {pinned ? (
+        <Pin
+          className={`lucide-inline shrink-0 text-accent ${noRoom ? 'opacity-40' : 'fill-current'}`}
+          aria-hidden
+        />
+      ) : null}
     </DropdownMenuRadioItem>
   )
 }
@@ -295,57 +385,51 @@ function SwitcherMenu({
   entries,
   activeId,
   onSelect,
+  pinned,
+  onTogglePin,
+  clippedPinned,
 }: {
   entries: SwitcherEntry[]
   activeId: string | null
   onSelect: (id: string | null) => void
+  pinned: Set<string>
+  onTogglePin: (id: string) => void
+  clippedPinned: Set<string>
 }) {
   const [open, setOpen] = useState(false)
-  const active = entries.find(e => e.id === activeId) ?? entries[0]
-  // Unread that the user cannot see right now. The active pane's own count is
-  // already zeroed on selection, but excluding it explicitly keeps the badge
-  // honest if a background message lands on the pane being viewed.
-  const elsewhere = entries.reduce(
-    (sum, e) => (e.id === activeId ? sum : sum + e.unread),
-    0,
-  )
+  // Unread the user cannot see: everything that is neither the active pane nor a
+  // chip currently on screen. A pinned crew whose chip got cut off counts, since
+  // its badge went with it.
+  const elsewhere = entries.reduce((sum, e) => {
+    const id = e.id ?? LOCAL_VALUE
+    const onScreen = (e.id ?? null) === activeId || (pinned.has(id) && !clippedPinned.has(id))
+    return onScreen ? sum : sum + e.unread
+  }, 0)
+  const label =
+    elsewhere > 0
+      ? i18nT('components.instanceTabBar.switch_crew_unread', { n: elsewhere })
+      : i18nT('components.instanceTabBar.switch_crew')
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          // The same sentence the accessible name carries, so a sighted user is
-          // not left reading a count of OTHER crews as this pane's own.
-          title={
-            elsewhere > 0
-              ? i18nT('components.instanceTabBar.switch_crew_active_unread', {
-                  name: active?.name ?? i18nT('components.instanceTabBar.local'),
-                  n: elsewhere,
-                })
-              : undefined
-          }
-          aria-label={
-            elsewhere > 0
-              ? i18nT('components.instanceTabBar.switch_crew_active_unread', {
-                  name: active?.name ?? i18nT('components.instanceTabBar.local'),
-                  n: elsewhere,
-                })
-              : i18nT('components.instanceTabBar.switch_crew_active', {
-                  name: active?.name ?? i18nT('components.instanceTabBar.local'),
-                })
-          }
-          className="flex items-center gap-1.5 h-6 px-2.5 rounded-md text-[12px] whitespace-nowrap transition-colors border border-transparent shrink-0 max-w-[260px] bg-accent-subtle text-accent font-bold hover:bg-bg-hover focus-ring"
+          title={label}
+          aria-label={label}
+          className="relative flex items-center justify-center h-6 w-6 shrink-0 rounded-md border border-transparent text-muted transition-colors hover:bg-bg-hover hover:text-text focus-ring"
         >
-          {active?.id === null ? (
-            <Home className="lucide-inline shrink-0" />
-          ) : active?.connecting ? (
-            <Loader2 className="lucide-inline shrink-0 animate-spin" />
-          ) : (
-            <Server className="lucide-inline shrink-0" />
-          )}
-          <span className="truncate">{active?.name ?? i18nT('components.instanceTabBar.local')}</span>
-          {elsewhere > 0 ? <UnreadBadge count={elsewhere} aggregate /> : null}
-          <ChevronDown className="lucide-inline shrink-0 opacity-70" />
+          <ChevronDown className="lucide-inline shrink-0" />
+          {elsewhere > 0 ? (
+            // Absolutely positioned so appearing cannot change the trigger's
+            // width: the chip row is sized from the space this button leaves, so a
+            // badge taking layout space would feed its own measurement.
+            <span
+              aria-hidden
+              className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-[3px] rounded-full bg-accent text-accent-fg text-[10px] font-semibold leading-[14px] text-center pointer-events-none"
+            >
+              {badgeText(elsewhere)}
+            </span>
+          ) : null}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -359,10 +443,69 @@ function SwitcherMenu({
               {/* Local is the user's own machine, not a crew: a rule separates it
                   from the remote list so the two never read as one flat set. */}
               {i === 1 ? <DropdownMenuSeparator /> : null}
-              <SwitcherRow entry={entry} onSelect={() => onSelect(entry.id)} />
+              <SwitcherRow
+                entry={entry}
+                onSelect={() => onSelect(entry.id)}
+                pinned={pinned.has(entry.id ?? LOCAL_VALUE)}
+                noRoom={clippedPinned.has(entry.id ?? LOCAL_VALUE)}
+              />
             </Fragment>
           ))}
         </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        {/* Pinning is a flat section of this menu rather than a submenu, and not a
+            button on each row above: a menuitemradio may not contain another
+            interactive control (nested interactive elements are invalid ARIA), and
+            a submenu buries a set-once choice behind a hover. Listing the crews
+            twice is the cost — once to switch to, once to pin — and it reads
+            cleanly because the two lists answer different questions. Checkbox
+            semantics are hand-built on DropdownMenuItem, the same pattern the
+            session sidebar's folder filter uses, because the menu has no checkbox
+            primitive. */}
+        <DropdownMenuLabel className="text-[11px] uppercase tracking-[.04em] text-muted">
+          {i18nT('components.instanceTabBar.pin_crews')}
+        </DropdownMenuLabel>
+        {entries.map(entry => {
+          const id = entry.id ?? LOCAL_VALUE
+          const isPinned = pinned.has(id)
+          return (
+            <DropdownMenuItem
+              key={`pin-${id}`}
+              className="gap-2 text-[13px]"
+              role="menuitemcheckbox"
+              aria-checked={isPinned}
+              data-testid={`crew-pin-${id}`}
+              title={
+                isPinned
+                  ? i18nT('components.instanceTabBar.unpin_crew', { name: entry.name })
+                  : i18nT('components.instanceTabBar.pin_crew', { name: entry.name })
+              }
+              // Two handlers, deliberately: `onClick` is the plain DOM event and is
+              // what actually toggles, while `onSelect` exists only to
+              // preventDefault so the menu stays open for a second pin.
+              onClick={() => onTogglePin(id)}
+              onSelect={(e: Event) => e.preventDefault()}
+            >
+              <span
+                aria-hidden
+                className="w-3.5 h-3.5 shrink-0 rounded-[3px] border flex items-center justify-center"
+                style={
+                  isPinned
+                    ? { borderColor: 'var(--accent)', background: 'var(--accent)' }
+                    : { borderColor: 'var(--border)', background: 'transparent' }
+                }
+              >
+                {isPinned ? <Check className="lucide-inline text-accent-fg" strokeWidth={3} /> : null}
+              </span>
+              <span className="flex-1 truncate">{entry.name}</span>
+              {isPinned && clippedPinned.has(id) ? (
+                <span className="shrink-0 text-[11px] text-muted">
+                  {i18nT('components.instanceTabBar.no_room')}
+                </span>
+              ) : null}
+            </DropdownMenuItem>
+          )
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -429,91 +572,196 @@ function SwitcherChip({
   )
 }
 
+/** Set equality by membership, so a re-measure that changed nothing is a no-op. */
+function sameIds(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const id of a) if (!b.has(id)) return false
+  return true
+}
+
 /**
- * The pin that flips the switcher between the compact dropdown and the
- * always-expanded chip row. Pressed (accent, filled) means pinned open; the
- * choice is persisted so it survives reloads and pane switches.
+ * Which chips the row cut off, given each chip's offset and the row's visible
+ * width.
+ *
+ * Pure so it can be tested: jsdom performs no layout, so every offset there is 0
+ * and a rendered-component test could never distinguish a fitted row from a
+ * clipped one.
+ *
+ * A chip counts as cut off as soon as its trailing edge passes the visible width,
+ * so the partially-visible one at the boundary is included — it is exactly the
+ * chip a user cannot read, and the one the dropdown therefore has to account for.
+ * The 1px tolerance absorbs sub-pixel layout.
  */
-function ExpandToggle({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
-  const label = expanded
-    ? i18nT('components.instanceTabBar.collapse_crews')
-    : i18nT('components.instanceTabBar.show_all_crews')
+export function clippedChipIds(
+  chips: readonly { id: string; left: number; width: number }[],
+  visibleWidth: number,
+): Set<string> {
+  const clipped = new Set<string>()
+  for (const chip of chips) {
+    if (chip.left + chip.width > visibleWidth + 1) clipped.add(chip.id)
+  }
+  return clipped
+}
+
+/**
+ * Which pinned chips the row had to cut off, by id.
+ *
+ * Measuring is what makes that state SAYABLE in the dropdown — without it, a
+ * pinned crew with no visible chip reads as a pin that silently failed.
+ *
+ * `offsetLeft` is sound here only because the row carries `position: relative`,
+ * which makes it the chips' offsetParent and puts both in the same coordinate
+ * space as its `clientWidth`. Without that, offsetLeft is measured from some
+ * arbitrary positioned ancestor and the comparison silently counts VISIBLE chips
+ * as clipped.
+ *
+ * Reporting this upward cannot feed back into the layout, which is why it is
+ * safe: the result is consumed only by the dropdown's rows, which are portalled
+ * and contribute nothing to the header's width.
+ */
+function useClippedChipIds(
+  rowRef: React.RefObject<HTMLDivElement | null>,
+  ids: readonly string[],
+): Set<string> {
+  const [clipped, setClipped] = useState<Set<string>>(() => new Set())
+  // Identity-stable dep: a fresh array on every render would re-arm the observer.
+  const idsKey = ids.join('\u0000')
+  useEffect(() => {
+    const el = rowRef.current
+    if (!el) return
+    const idList = idsKey === '' ? [] : idsKey.split('\u0000')
+    const measure = () => {
+      const kids = Array.from(el.children) as HTMLElement[]
+      const next = clippedChipIds(
+        kids.flatMap((kid, i) =>
+          idList[i] === undefined
+            ? []
+            : [{ id: idList[i], left: kid.offsetLeft, width: kid.offsetWidth }],
+        ),
+        el.clientWidth,
+      )
+      setClipped(prev => (sameIds(prev, next) ? prev : next))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [rowRef, idsKey])
+  return clipped
+}
+
+/**
+ * The pinned crews, as always-visible chips between the active crew and the
+ * dropdown.
+ *
+ * One nowrap line, clipped. Wrapping into a hidden second row would keep every
+ * chip whole, but it leaves the row holding its full ALLOCATED width with the
+ * wrapped chips' space empty — which pushes the trailing dropdown away from the
+ * last visible chip by a gap that changes with the viewport. Filling the row
+ * instead keeps the dropdown against the chips, at the cost of the boundary chip
+ * being cut rather than dropped. The fade marks that edge, so a cut chip reads as
+ * "there is more" and the dropdown immediately after it is where the rest is.
+ *
+ * The row needs no width cap of its own: it sits in the topbar's left grid track
+ * (`minmax(0,1fr)`) inside `.tb-left`, which carries `min-width:0` and
+ * `overflow:hidden`, so the track already prevents it from reaching the centered
+ * search column.
+ */
+function CrewChipRow({
+  chips,
+  activeId,
+  onSelect,
+  onClippedChange,
+}: {
+  chips: SwitcherEntry[]
+  activeId: string | null
+  onSelect: (id: string | null) => void
+  onClippedChange: (clipped: Set<string>) => void
+}) {
+  const rowRef = useRef<HTMLDivElement>(null)
+  const ids = useMemo(() => chips.map(c => c.id ?? LOCAL_VALUE), [chips])
+  const clipped = useClippedChipIds(rowRef, ids)
+  useEffect(() => {
+    onClippedChange(clipped)
+  }, [clipped, onClippedChange])
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-pressed={expanded}
-      title={label}
-      aria-label={label}
-      className={
-        'flex items-center justify-center h-6 w-6 rounded-md shrink-0 transition-colors border border-transparent focus-ring ' +
-        (expanded ? 'bg-accent-subtle text-accent' : 'text-muted hover:bg-bg-hover hover:text-text')
-      }
+    <div
+      ref={rowRef}
+      data-testid="crew-chip-row"
+      // `relative` is load-bearing, not cosmetic: it makes this element the chips'
+      // offsetParent so useClippedChipIds can compare their offsetLeft against
+      // this row's own clientWidth.
+      className="relative flex flex-nowrap items-center gap-1 min-w-0 overflow-hidden crew-chip-row-fade"
     >
-      <Pin className={`lucide-inline ${expanded ? 'fill-current' : ''}`} />
-    </button>
+      {chips.map(entry => (
+        <SwitcherChip
+          key={entry.id ?? LOCAL_VALUE}
+          entry={entry}
+          active={(entry.id ?? null) === activeId}
+          onSelect={() => onSelect(entry.id)}
+        />
+      ))}
+    </div>
   )
 }
 
 /**
- * The switcher surface both bars mount: the compact dropdown by default, or —
- * when the user pins it — every crew as an always-visible chip row. The pin
- * lives beside either form so the preference is reachable in both states.
+ * The switcher surface both bars mount: the crew on screen, then a chip for each
+ * crew the user pinned, then the dropdown holding everything else.
  *
- * The expanded row always stays one line and scrolls horizontally: both the
- * fixed-height `inline` header and the fixed-height `strip` overlay bar would
- * spill a wrapped second row over the panel beneath them, so wrapping is not an
- * option in either. It needs no width cap of its own: in the header the row sits
- * inside the identity group's own grid track, which the centred search can never
- * be pushed out of.
+ * The dropdown TRAILS the chips so it stays adjacent to the last one and reads as
+ * "and the rest" — see `CrewChipRow` for why that placement forces a clipped row
+ * rather than a wrapped one.
  */
 function Switcher({
   entries,
   activeId,
   onSelect,
-  expanded: expandedProp,
-  onSetExpanded,
+  pinned: pinnedProp,
+  onTogglePin: onTogglePinProp,
 }: {
   entries: SwitcherEntry[]
   activeId: string | null
   onSelect: (id: string | null) => void
-  /** When provided (embedded pane), the pin state is driven by the parent's
-   *  relayed model instead of this realm's localStorage — a remote pane lives
-   *  in a separate cross-origin iframe whose store the parent can't reach, so
-   *  without this override it would ignore the pin and always show collapsed. */
-  expanded?: boolean
-  /** Paired override for the toggle: the embedded pane relays the new value up
-   *  to the parent (which owns the one shared preference) instead of writing
-   *  its own store. Falls back to the module store when absent (local bar). */
-  onSetExpanded?: (next: boolean) => void
+  /** When provided (embedded pane), the pin set is driven by the parent's relayed
+   *  model instead of this realm's localStorage — a remote pane lives in a
+   *  separate cross-origin iframe whose store the parent cannot reach, so without
+   *  this override it would ignore the pins entirely. */
+  pinned?: Set<string>
+  /** Paired override: the embedded pane relays a toggle up to the parent (which
+   *  owns the one shared preference) instead of writing its own store. */
+  onTogglePin?: (id: string) => void
 }) {
-  const [storeExpanded, setStoreExpanded] = useCrewSwitcherExpanded()
-  const expanded = expandedProp ?? storeExpanded
-  const setExpanded = onSetExpanded ?? setStoreExpanded
-  if (!expanded) {
-    return (
-      <div className="flex items-center gap-1 min-w-0">
-        <SwitcherMenu entries={entries} activeId={activeId} onSelect={onSelect} />
-        <ExpandToggle expanded={false} onToggle={() => setExpanded(true)} />
-      </div>
-    )
-  }
+  const [storePinned, storeTogglePin] = useCrewPins()
+  const pinned = pinnedProp ?? storePinned
+  const togglePin = onTogglePinProp ?? storeTogglePin
+  const [clippedPinned, setClippedPinned] = useState<Set<string>>(() => new Set())
+  const active = entries.find(e => (e.id ?? null) === activeId) ?? entries[0]
+  // The crew on screen leads the row and is never a pinned chip as well: two
+  // copies of one name would spend the track's width saying the same thing twice.
+  const chips = useMemo(
+    () => entries.filter(e => pinned.has(e.id ?? LOCAL_VALUE) && (e.id ?? null) !== activeId),
+    [entries, pinned, activeId],
+  )
   return (
     <div className="flex items-center gap-1 min-w-0">
-      {/* No role/aria here: the parent bar is already a role="group" labelled
-          "Remote crews", so a second group with the same name would be
-          announced twice around one control set. */}
-      <div className="flex items-center gap-1 min-w-0 flex-nowrap overflow-x-auto">
-        {entries.map(entry => (
-          <SwitcherChip
-            key={entry.id ?? LOCAL_VALUE}
-            entry={entry}
-            active={(entry.id ?? null) === activeId}
-            onSelect={() => onSelect(entry.id)}
-          />
-        ))}
-      </div>
-      <ExpandToggle expanded onToggle={() => setExpanded(false)} />
+      {active ? <SwitcherChip entry={active} active onSelect={() => onSelect(active.id)} /> : null}
+      {chips.length > 0 ? (
+        <CrewChipRow
+          chips={chips}
+          activeId={activeId}
+          onSelect={onSelect}
+          onClippedChange={setClippedPinned}
+        />
+      ) : null}
+      <SwitcherMenu
+        entries={entries}
+        activeId={activeId}
+        onSelect={onSelect}
+        pinned={pinned}
+        onTogglePin={togglePin}
+        clippedPinned={clippedPinned}
+      />
     </div>
   )
 }
@@ -530,12 +778,12 @@ function EmbeddedInstanceTabBar({ variant }: { variant: 'strip' | 'inline' }) {
     // nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration
     window.parent?.postMessage({ type: 'mc-switch-instance', v: 1, id }, '*')
   }, [])
-  // The pin lives on the parent (one shared preference across every pane); this
-  // pane can't write the parent's store from its own iframe realm, so it relays
-  // the new value up and lets the parent re-broadcast the model back down.
-  const onSetExpanded = useCallback((next: boolean) => {
+  // The pins live on the parent (one shared set across every pane); this pane
+  // cannot write the parent's store from its own iframe realm, so it relays the
+  // toggle up and lets the parent re-broadcast the model back down.
+  const onTogglePin = useCallback((id: string) => {
     // nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration
-    window.parent?.postMessage({ type: 'mc-set-expanded', v: 1, expanded: next }, '*')
+    window.parent?.postMessage({ type: 'mc-set-crew-pin', v: 1, id }, '*')
   }, [])
   const entries = useMemo<SwitcherEntry[]>(() => {
     if (!host) return []
@@ -558,6 +806,8 @@ function EmbeddedInstanceTabBar({ variant }: { variant: 'strip' | 'inline' }) {
       })),
     ]
   }, [host])
+  // The relayed model carries a plain array (postMessage cannot carry a Set).
+  const pinnedFromHost = useMemo(() => new Set(host?.pinnedCrews ?? []), [host?.pinnedCrews])
   if (!host || host.tabs.length === 0) return null
   return (
     <div
@@ -569,8 +819,8 @@ function EmbeddedInstanceTabBar({ variant }: { variant: 'strip' | 'inline' }) {
         entries={entries}
         activeId={host.activeId}
         onSelect={onSelect}
-        expanded={host.expanded}
-        onSetExpanded={onSetExpanded}
+        pinned={pinnedFromHost}
+        onTogglePin={onTogglePin}
       />
     </div>
   )

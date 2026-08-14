@@ -5263,11 +5263,15 @@
       "tunnel_error": "ошибка туннеля",
       "tunnel_state": "Туннель {{state}}.",
       "n_unread": "Непрочитанных: {{n}}",
-      "switch_crew_active": "Сменить экипаж, сейчас {{name}}",
-      "switch_crew_active_unread": "Сменить экипаж, сейчас {{name}}, непрочитанных в других: {{n}}",
+      "switch_crew": "Переключить команду",
+      "switch_crew_unread": "Переключить команду, {{n}} непрочитанных в другом месте",
       "stopped": "остановлен",
-      "show_all_crews": "Показать все команды",
-      "collapse_crews": "Свернуть команды"
+      "pin_crews": "Закрепить команды…",
+      "pinned": "закреплено",
+      "pinned_no_room": "закреплено, нет места в заголовке",
+      "no_room": "нет места",
+      "pin_crew": "Закрепить {{name}} в заголовке",
+      "unpin_crew": "Открепить {{name}}"
     },
     "instancesViewport": {
       "connecting": "Подключение…",

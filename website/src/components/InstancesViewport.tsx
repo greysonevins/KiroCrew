@@ -36,7 +36,7 @@ import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
 import { api } from '../api/client'
 import { useAppDispatch, useAppSelector } from '../store'
 import { removeWarm, setActiveId, setPaneReady, setUnread, setWarm } from '../store/instancesSlice'
-import InstanceTabBar, { visibleInstanceTabs, useCrewSwitcherExpanded, setCrewSwitcherExpanded } from './InstanceTabBar'
+import InstanceTabBar, { visibleInstanceTabs, useCrewPins, toggleCrewPin } from './InstanceTabBar'
 import { resolveTunnelOrigin } from '../lib/tunnelOrigin'
 import { LINUX_CAPTION_CONTROLS_WIDTH, TRAFFIC_LIGHT_INSET_PX, WIN_CAPTION_OVERLAY_WIDTH } from '../lib/electron'
 import { isEmbeddedPane } from '../lib/embedded'
@@ -81,8 +81,11 @@ export default function InstancesViewport({ macInset = false }: { macInset?: boo
   // The crew-switcher pin preference, relayed into every embedded pane so a
   // remote pane's bar matches the local bar. Reactive: a change re-broadcasts
   // the model (see buildModelFor deps + the broadcast effect) so all panes flip
-  // together, and the embedded pin toggle routes back here via `mc-set-expanded`.
-  const [expanded] = useCrewSwitcherExpanded()
+  // together, and an embedded pin toggle routes back here via `mc-set-crew-pin`.
+  const [pinnedCrewSet] = useCrewPins()
+  // Stable array identity per pin change, so the model memo below does not
+  // re-broadcast on every render.
+  const pinnedCrews = useMemo(() => [...pinnedCrewSet], [pinnedCrewSet])
 
   // Per-instance header drag gaps relayed up by each embedded pane
   // (mc-drag-gaps). Only the ACTIVE pane's gaps are rendered, but they are
@@ -213,13 +216,13 @@ export default function InstancesViewport({ macInset = false }: { macInset?: boo
         ) {
           dispatch(setActiveId(target))
         }
-      } else if (data.type === 'mc-set-expanded') {
-        // The embedded pane's pin was toggled. It has no access to the parent's
-        // preference store from its own iframe realm, so it relays the new value
-        // here; applying it broadcasts to every bar (local header + all panes)
-        // via the module store, keeping the pin one shared value everywhere.
-        const next = (data as { expanded?: unknown }).expanded
-        if (typeof next === 'boolean') setCrewSwitcherExpanded(next)
+      } else if (data.type === 'mc-set-crew-pin') {
+        // A pin was toggled inside an embedded pane. It has no access to the
+        // parent's preference store from its own iframe realm, so it relays the
+        // crew id here; applying it broadcasts to every bar (local header + all
+        // panes) via the module store, keeping the set one shared value.
+        const id = (data as { id?: unknown }).id
+        if (typeof id === 'string' && id) toggleCrewPin(id)
       } else if (data.type === 'mc-embedded-ready') {
         // The pane just (re)mounted and asked for the current model — send it now
         // rather than waiting for the next input-driven broadcast. Also record
@@ -387,9 +390,15 @@ export default function InstancesViewport({ macInset = false }: { macInset?: boo
             ttlTotal: ttlToSeconds(selfInst.ttl),
           }
         : null
-      return { type: 'mc-host-model', v: 1, tabs, activeId, self, macInset, electron: isElectron, expanded }
+      return {
+        type: 'mc-host-model', v: 1, tabs, activeId, self, macInset,
+        electron: isElectron,
+        // Array, not the Set itself: structured clone rejects a Set across this
+        // boundary in some engines and the receiver validates element-wise anyway.
+        pinnedCrews,
+      }
     },
-    [instancesQuery.data, warm, unread, activeId, macInset, expanded],
+    [instancesQuery.data, warm, unread, activeId, macInset, pinnedCrews],
   )
 
   // Post the model into one embedded pane, addressed to its exact loopback
@@ -416,7 +425,7 @@ export default function InstancesViewport({ macInset = false }: { macInset?: boo
   // to a loopback frame.
   useEffect(() => {
     for (const id of Object.keys(warm)) postModelTo(id)
-  }, [warm, activeId, unread, macInset, instancesQuery.data, postModelTo, expanded])
+  }, [warm, activeId, unread, macInset, instancesQuery.data, postModelTo, pinnedCrews])
 
   // Keep warm iframes mounted across Local<->remote switches (hide-not-unmount).
   // Also render when the active tab is a remote instance with no warm iframe

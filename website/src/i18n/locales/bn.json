@@ -5101,11 +5101,15 @@
       "tunnel_error": "টানেল ত্রুটি",
       "tunnel_state": "টানেল {{state}}।",
       "n_unread": "{{n}} অপঠিত",
-      "switch_crew_active": "ক্রু বদলান, বর্তমানে {{name}}",
-      "switch_crew_active_unread": "ক্রু বদলান, বর্তমানে {{name}}, অন্যগুলিতে {{n}} অপঠিত",
+      "switch_crew": "ক্রু বদলান",
+      "switch_crew_unread": "ক্রু বদলান, অন্যত্র {{n}}টি অপঠিত",
       "stopped": "বন্ধ",
-      "show_all_crews": "সমস্ত ক্রু দেখান",
-      "collapse_crews": "ক্রু সংকুচিত করুন"
+      "pin_crews": "ক্রু পিন করুন…",
+      "pinned": "পিন করা",
+      "pinned_no_room": "পিন করা, হেডারে জায়গা নেই",
+      "no_room": "জায়গা নেই",
+      "pin_crew": "{{name}} হেডারে পিন করুন",
+      "unpin_crew": "{{name}} অানপিন করুন"
     },
     "instancesViewport": {
       "connecting": "কানেক্ট হচ্ছে…",

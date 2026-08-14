@@ -21,7 +21,7 @@ const model = (over: Partial<HostModel> = {}): HostModel => ({
   self: null,
   macInset: false,
   electron: true,
-  expanded: false,
+  pinnedCrews: [],
   ...over,
 })
 
@@ -69,27 +69,44 @@ describe('EmbeddedInstanceTabBar (option B)', () => {
     expect(container.querySelector('[aria-label="Remote crews"]')).toBeNull()
   })
 
-  it('honors the relayed pin: expanded model renders the chip row, not the dropdown', async () => {
+  it('honors the relayed pin set: a pinned crew renders as a chip beside the dropdown', async () => {
     const store = createTestStore({
-      instances: { warm: {}, activeId: 'cd-1', mru: [], unread: {}, host: model({ expanded: true }) },
+      instances: {
+        warm: {}, activeId: null, mru: [], unread: {},
+        // Local is active, so the pinned crew is the one that gets a chip.
+        host: model({ activeId: null, pinnedCrews: ['cd-1'] }),
+      },
     })
     renderWithProviders(<InstanceTabBar variant="inline" />, { store })
-    // Expanded: crews are always-visible chips (buttons), so there is no
-    // "Switch crew" dropdown trigger to open.
-    expect(screen.queryByRole('button', { name: /Switch crew/i })).toBeNull()
-    expect(screen.getByRole('button', { name: /Cloud One/ })).toBeTruthy()
+    // The chip row exists and holds the pinned crew. The dropdown stays — it is
+    // the trailing chevron that reaches every OTHER crew.
+    const row = screen.getByTestId('crew-chip-row')
+    expect(row.textContent).toMatch(/Cloud One/)
+    expect(screen.getByRole('button', { name: /Switch crew/i })).toBeTruthy()
+  })
+
+  it('renders no chip row when the parent relays an empty pin set', () => {
+    const store = createTestStore({
+      instances: { warm: {}, activeId: null, mru: [], unread: {}, host: model({ activeId: null }) },
+    })
+    renderWithProviders(<InstanceTabBar variant="inline" />, { store })
+    expect(screen.queryByTestId('crew-chip-row')).toBeNull()
   })
 
   it('relays a pin toggle up to the parent instead of writing its own store', async () => {
     const post = vi.spyOn(window.parent, 'postMessage').mockImplementation(() => {})
     const store = createTestStore({
-      instances: { warm: {}, activeId: 'cd-1', mru: [], unread: {}, host: model({ expanded: true }) },
+      instances: { warm: {}, activeId: null, mru: [], unread: {}, host: model({ activeId: null }) },
     })
     renderWithProviders(<InstanceTabBar variant="inline" />, { store })
-    // The pin is pressed (expanded); clicking it asks the parent to collapse.
-    await userEvent.click(screen.getByRole('button', { name: /Collapse|Show all/i }))
+
+    // A pane cannot write the parent's preference store from its own iframe
+    // realm, so pinning here must travel up as a message rather than persist
+    // locally — otherwise the pane would drift from every other bar.
+    await userEvent.click(screen.getByRole('button', { name: /Switch crew/i }))
+    await userEvent.click(await screen.findByTestId('crew-pin-cd-1'))
     expect(post).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'mc-set-expanded', expanded: false }),
+      expect.objectContaining({ type: 'mc-set-crew-pin', id: 'cd-1' }),
       '*',
     )
   })

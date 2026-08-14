@@ -46,9 +46,12 @@ dashboard token on the remote, and embedding the remote dashboard in an
 `<iframe>`. You switch panes from a dropdown (`InstanceTabBar`, plus
 Cmd/Ctrl+digit in the Electron shell); the hub keeps the most-recently-used set
 "warm" (tunnel + iframe live) and lazily reconnects the rest. The switcher is a
-menu rather than a row of chips because the number of configured crews is
-unbounded: the strip costs constant width, and unread counts stay visible on the
-closed trigger as an aggregate badge over every crew that is not on screen.
+menu rather than a row of chips by DEFAULT because the number of configured crews
+is unbounded: the closed trigger costs constant width, and unread counts stay
+visible on it as an aggregate badge over every crew that is not on screen. A user
+who switches between the same two or three crews can PIN those out of the menu
+into always-visible chips beside it, spending header width only on the
+destinations they actually use — see [Pinned crew chips](#pinned-crew-chips).
 
 **Key properties**
 
@@ -453,7 +456,9 @@ what its own edit invalidated, and never reopens anything on the user's behalf.
    returns to your own dashboard). In the Electron shell, Cmd/Ctrl+digit jumps
    between panes in switcher order. Each row names its tunnel state in words on
    screen next to the status dot — colour is reinforcement, not the carrier, so
-   the row that errored is findable without hovering every entry.
+   the row that errored is findable without hovering every entry. Crews you switch
+   between often can be PINNED beside the trigger as chips, so the switch costs no
+   dropdown click — see [Pinned crew chips](#pinned-crew-chips).
 6. **Diagnose** a flaky instance (runs the ladder), or **Disconnect** from its
    row. **Edit settings** / **Remove** live in the row's overflow menu — a row
    shows two primary actions plus that menu, so everything past them is one
@@ -513,6 +518,55 @@ clicked, since the menu has already closed by then.
 > Prerequisite: you can already `ssh <ssh_host>` non-interactively from the hub
 > (a valid key or cert in your `ssh-agent`, no password prompt), and the remote
 > has `kirocrew` installed with a gateway running on its loopback port.
+
+### Pinned crew chips
+
+Switching between two crews through the dropdown costs a click every time. Any
+entry — including **Local** — can be PINNED from the dropdown's *Pin crews*
+section, which lifts it out of the menu into an always-visible chip beside the
+trigger. Nothing is pinned by default, so a single-crew user pays no header width
+for the feature and sees no chip row at all.
+
+Pinning is per crew rather than one expand-everything switch because the header's
+budget is a PIXEL budget, not a crew count: three crews named after real hosts
+outgrow it while six short names fit. Choosing WHICH crews are worth header space
+is what keeps that budget spendable on the ones actually being switched between.
+
+| Concern | Behaviour |
+|---|---|
+| Storage | `localStorage` key `mc-crew-switcher-pinned`, a JSON array of instance ids (`__local__` for the local dashboard). A module-level store broadcasts changes, because several bars in one realm are mounted at once and hidden with `display:none` rather than unmounted — a per-component hook would leave a hidden bar on a stale value until it remounted. A remote pane's embedded bar is a separate cross-origin realm and so carries its own pin set. |
+| Migration | The predecessor was one expand-everything flag, `mc-crew-switcher-expanded`. On first read a `'1'` there migrates to a pinned **Local** rather than to an empty set: that user wanted chips, and migrating them to nothing would read as the feature having been removed. The legacy key is dropped in the same pass. |
+| Order | The crew on screen leads as its own chip, then the pinned chips, then the dropdown. The dropdown TRAILS the chips so it stays adjacent to the last one and reads as "and the rest"; it carries the aggregate unread for every crew not on screen, clipped ones included. The active crew is never also a pinned chip — two copies of one name would spend the budget twice. |
+| Width bound | None of its own. The switcher sits in the topbar's left grid track (`minmax(0,1fr)`) inside `.tb-left`, which carries `min-width:0` and `overflow:hidden`, so the track structurally prevents it from reaching the centered search column — see [the three-track topbar](#pinned-crew-chips). Earlier revisions of this feature carried a `vw`-derived `max-width` because the search overlay was absolutely positioned and a left-side cluster could squeeze it; the grid layout removed that failure mode along with the need for the cap. |
+| Overflow | The row is a single `nowrap` line with `overflow: hidden`, and the chip at the boundary is CUT rather than dropped. Wrapping into a hidden second row would keep every chip whole, but a wrapped row still holds its full ALLOCATED width with the wrapped chips' space empty — which pushes the trailing dropdown away from the last visible chip by a gap that changes with the viewport. Filling the row keeps the two adjacent (measured at the 4px flex gap, asserted by the capture harness). A trailing fade marks the cut edge, so a cut chip reads as "there is more, in the dropdown next to me" rather than as a rendering fault. Cut chips stay reachable in the dropdown, whose row marks them *no room* so a pin with no visible chip does not read as a pin that failed. |
+
+**Why the switcher needs no width cap.** The topbar is a three-track CSS grid:
+`minmax(0,1fr) | clamp(240px,22vw,480px) | minmax(0,1fr)`. The search column is a
+flow-internal track, not an absolutely positioned overlay, so a wide left cluster
+cannot reach it: `.tb-left` is `min-width:0` with `overflow:hidden`, and the track
+simply gives the chips less room. That is the whole bound, and it holds at every
+viewport width and under the macOS Electron 84px header inset (which narrows the
+tracks rather than shifting content over them).
+
+This is worth stating because the obvious alternative is wrong in a way that
+already shipped once: a hardcoded fraction. `max-w-[42vw]` on the chip row reached
+~538px at 1280px, which under the previous absolutely-positioned search overlay
+pushed its available space under the minimum width and unmounted it outright. A
+fraction cannot track a viewport-relative sibling; a grid track does it by
+construction.
+
+
+Counting which chips were cut off is read-only and one-directional: the result is
+consumed only by the dropdown's rows, which are portalled and contribute nothing
+to the header's width, so nothing sized by the measurement lives inside the thing
+being measured. The dropdown's own unread badge is absolutely positioned for the
+same reason — appearing must not change the button's width, since the chip row is
+sized from the space that button leaves. The rule itself (a chip whose trailing
+edge passes the row's visible width is cut) is a pure function, `clippedChipIds`,
+because jsdom performs no layout and a rendered test could never distinguish a
+fitted row from a clipped one. `offsetLeft` is only sound there because the row
+carries `position: relative`, making it the chips' offsetParent and putting both
+in the same coordinate space as its `clientWidth`.
 
 ---
 

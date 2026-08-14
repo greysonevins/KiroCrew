@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders, createTestStore } from './helpers'
-import InstanceTabBar, { setCrewSwitcherExpanded } from '../components/InstanceTabBar'
+import InstanceTabBar, {
+  setCrewPins,
+  resolvePinnedPref,
+  clippedChipIds,
+} from '../components/InstanceTabBar'
 import type { InstanceView, SsoStatus } from '../api/client'
 
 vi.mock('../api/client', () => {
@@ -46,7 +50,7 @@ const listResp = (instances: InstanceView[]) => ({ active: true, instances, warm
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
-  setCrewSwitcherExpanded(false)
+  setCrewPins([])
   vi.mocked(isEmbeddedPane).mockReturnValue(false)
 })
 
@@ -248,8 +252,8 @@ describe('InstanceTabBar', () => {
     expect(row.textContent?.match(/clouddeskARM/g) ?? []).toHaveLength(1)
   })
 
-  it('pins the switcher open as an always-visible crew row and remembers the choice', async () => {
-    // Collapsed by default: the crew lives behind the dropdown, one click away.
+  it('pins one crew out of the dropdown into an always-visible chip, and remembers it', async () => {
+    // Nothing pinned by default: the crew lives behind the dropdown.
     vi.mocked(api.listInstances).mockResolvedValue(listResp([conn()]))
     const store = createTestStore({
       instances: { warm: { 'cd-1': { port: 7778, token: 't' } }, activeId: null, mru: ['cd-1'], unread: {} },
@@ -257,21 +261,27 @@ describe('InstanceTabBar', () => {
     const u = userEvent.setup()
     renderWithProviders(<InstanceTabBar />, { store })
 
-    expect(await screen.findByRole('button', { name: /Show all crews/i })).toBeInTheDocument()
-    // The crew is not on screen yet — it is inside the still-closed menu.
-    expect(screen.queryByRole('button', { name: /Cloud One/i })).toBeNull()
+    // No chip row at all until something is pinned, so a single-crew user pays
+    // no header width for the feature.
+    expect(await screen.findByRole('button', { name: /Switch crew/i })).toBeInTheDocument()
+    expect(screen.queryByTestId('crew-chip-row')).toBeNull()
 
-    // Pin it open: every crew becomes a directly-clickable chip, no dropdown.
-    await u.click(screen.getByRole('button', { name: /Show all crews/i }))
-    expect(await screen.findByRole('button', { name: /Cloud One/i })).toBeInTheDocument()
-    // The preference is persisted so it survives reloads and pane switches.
-    expect(localStorage.getItem('mc-crew-switcher-expanded')).toBe('1')
-    // ...and the pin now offers the reverse.
-    expect(screen.getByRole('button', { name: /Collapse crews/i })).toBeInTheDocument()
+    // Pin it from the dropdown's flat Pin crews section.
+    await u.click(screen.getByRole('button', { name: /Switch crew/i }))
+    const pinItem = await screen.findByTestId('crew-pin-cd-1')
+    expect(pinItem).toHaveAttribute('aria-checked', 'false')
+    await u.click(pinItem)
+    // Persisted as a set of ids, so it survives reloads and pane switches.
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem('mc-crew-switcher-pinned')!)).toEqual(['cd-1']),
+    )
+    // ...and the chip is now on screen, outside the menu.
+    const row = await screen.findByTestId('crew-chip-row')
+    expect(row.textContent).toMatch(/Cloud One/)
   })
 
-  it('switches by clicking a crew chip when the switcher is pinned open', async () => {
-    setCrewSwitcherExpanded(true)
+  it('switches by clicking a pinned crew chip, without re-minting a warm pane', async () => {
+    setCrewPins(['cd-1'])
     vi.mocked(api.listInstances).mockResolvedValue(listResp([conn()]))
     const store = createTestStore({
       instances: { warm: { 'cd-1': { port: 7778, token: 't' } }, activeId: null, mru: ['cd-1'], unread: {} },
@@ -285,5 +295,84 @@ describe('InstanceTabBar', () => {
     // A live, warm pane just switches — clicking it must not re-mint.
     await new Promise(r => setTimeout(r, 0))
     expect(api.connectInstance).not.toHaveBeenCalled()
+  })
+
+  it('leads with the active crew and keeps it out of the pinned row', async () => {
+    // Both destinations pinned, Local active: the chip row carries only the crew.
+    setCrewPins(['__local__', 'cd-1'])
+    vi.mocked(api.listInstances).mockResolvedValue(listResp([conn()]))
+    const store = createTestStore({
+      instances: { warm: { 'cd-1': { port: 7778, token: 't' } }, activeId: null, mru: ['cd-1'], unread: {} },
+    })
+    renderWithProviders(<InstanceTabBar />, { store })
+
+    const row = await screen.findByTestId('crew-chip-row')
+    expect(row.textContent).toMatch(/Cloud One/)
+    expect(row.textContent).not.toMatch(/Local/)
+  })
+
+})
+
+describe('resolvePinnedPref', () => {
+  it('reads a stored id list', () => {
+    expect(resolvePinnedPref(JSON.stringify(['a', 'b']), null)).toEqual(['a', 'b'])
+  })
+
+  it('ignores a corrupted or non-array value instead of throwing', () => {
+    expect(resolvePinnedPref('{oops', null)).toEqual([])
+    expect(resolvePinnedPref('"a string"', null)).toEqual([])
+    expect(resolvePinnedPref(JSON.stringify([1, 'a', null]), null)).toEqual(['a'])
+  })
+
+  it('migrates the legacy expand switch to a pinned Local, not to nothing', () => {
+    // Someone who had the switcher pinned open wanted chips; migrating them to
+    // an empty set would read as the feature having been removed.
+    expect(resolvePinnedPref(null, '1')).toEqual(['__local__'])
+    expect(resolvePinnedPref(null, '0')).toEqual([])
+  })
+
+  it('prefers a stored set over the legacy switch', () => {
+    expect(resolvePinnedPref(JSON.stringify(['cd-1']), '1')).toEqual(['cd-1'])
+  })
+
+  it('defaults to nothing pinned', () => {
+    expect(resolvePinnedPref(null, null)).toEqual([])
+  })
+})
+
+describe('clippedChipIds', () => {
+  // jsdom performs no layout, so this rule is only testable as a pure function —
+  // every offset in a rendered test is 0.
+  it('reports a chip whose trailing edge passes the visible width', () => {
+    expect([
+      ...clippedChipIds(
+        [
+          { id: 'a', left: 0, width: 80 },
+          { id: 'b', left: 84, width: 80 },
+          { id: 'c', left: 168, width: 80 },
+        ],
+        200,
+      ),
+    ]).toEqual(['c'])
+  })
+
+  it('counts the partially visible chip at the boundary as clipped', () => {
+    // It is exactly the chip a user cannot read, so the dropdown has to account
+    // for it — the fade marks that edge rather than pretending it is present.
+    expect([...clippedChipIds([{ id: 'a', left: 0, width: 120 }], 100)]).toEqual(['a'])
+  })
+
+  it('tolerates a sub-pixel overhang', () => {
+    expect(clippedChipIds([{ id: 'a', left: 0, width: 100.4 }], 100).size).toBe(0)
+  })
+
+  it('reports nothing when every chip fits', () => {
+    expect(
+      clippedChipIds([{ id: 'a', left: 0, width: 80 }, { id: 'b', left: 84, width: 80 }], 400).size,
+    ).toBe(0)
+  })
+
+  it('handles an empty row', () => {
+    expect(clippedChipIds([], 300).size).toBe(0)
   })
 })

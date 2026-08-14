@@ -3768,8 +3768,8 @@
       "local": "Local",
       "local_dashboard": "Local dashboard",
       "n_unread": "{{n}} unread",
-      "switch_crew_active": "Switch crew, currently {{name}}",
-      "switch_crew_active_unread": "Switch crew, currently {{name}}, {{n}} unread elsewhere"
+      "switch_crew": "Switch crew",
+      "switch_crew_unread": "Switch crew, {{n}} unread elsewhere"
     },
     "instancesViewport": {
       "loading_pane": "Loading pane…",

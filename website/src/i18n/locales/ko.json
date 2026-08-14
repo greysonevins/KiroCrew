@@ -5020,11 +5020,15 @@
       "tunnel_error": "터널 오류",
       "tunnel_state": "터널 {{state}}.",
       "n_unread": "읽지 않음 {{n}}개",
-      "switch_crew_active": "크루 전환, 현재 {{name}}",
-      "switch_crew_active_unread": "크루 전환, 현재 {{name}}, 다른 크루에 읽지 않음 {{n}}개",
+      "switch_crew": "크루 전환",
+      "switch_crew_unread": "크루 전환, 다른 곳에 읽지 않은 항목 {{n}}개",
       "stopped": "중지됨",
-      "show_all_crews": "모든 크루 표시",
-      "collapse_crews": "크루 접기"
+      "pin_crews": "페로우 고정…",
+      "pinned": "고정됨",
+      "pinned_no_room": "고정됨, 헤더에 공간 없음",
+      "no_room": "공간 없음",
+      "pin_crew": "{{name}}을(를) 헤더에 고정",
+      "unpin_crew": "{{name}} 고정 해제"
     },
     "instancesViewport": {
       "connecting": "연결 중…",

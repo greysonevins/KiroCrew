@@ -5182,11 +5182,15 @@
       "tunnel_error": "errore del tunnel",
       "tunnel_state": "Tunnel {{state}}.",
       "n_unread": "Non letti: {{n}}",
-      "switch_crew_active": "Cambia crew, attualmente {{name}}",
-      "switch_crew_active_unread": "Cambia crew, attualmente {{name}}, non letti altrove: {{n}}",
+      "switch_crew": "Cambia crew",
+      "switch_crew_unread": "Cambia crew, {{n}} non letti altrove",
       "stopped": "arrestato",
-      "show_all_crews": "Mostra tutti i crew",
-      "collapse_crews": "Comprimi crew"
+      "pin_crews": "Fissa crew…",
+      "pinned": "fissato",
+      "pinned_no_room": "fissato, nessuno spazio nell’intestazione",
+      "no_room": "nessuno spazio",
+      "pin_crew": "Fissa {{name}} nell’intestazione",
+      "unpin_crew": "Rimuovi {{name}} dall’intestazione"
     },
     "instancesViewport": {
       "connecting": "Connessione in corso…",

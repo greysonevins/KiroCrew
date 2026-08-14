@@ -53,7 +53,12 @@ function parseHostModel(data: unknown): HostModel | null {
     self,
     macInset: !!d.macInset,
     electron: !!d.electron,
-    expanded: !!d.expanded,
+    // Element-wise validation, not a blind cast: this crosses a postMessage
+    // boundary, so a malformed or hostile payload must degrade to "nothing
+    // pinned" rather than putting non-strings into the pin set.
+    pinnedCrews: Array.isArray(d.pinnedCrews)
+      ? d.pinnedCrews.filter((id): id is string => typeof id === 'string')
+      : [],
   }
 }
 

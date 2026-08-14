@@ -5020,11 +5020,15 @@
       "tunnel_error": "トンネルエラー",
       "tunnel_state": "トンネル{{state}}。",
       "n_unread": "未読 {{n}} 件",
-      "switch_crew_active": "クルーを切り替え、現在は {{name}}",
-      "switch_crew_active_unread": "クルーを切り替え、現在は {{name}}、他に未読 {{n}} 件",
+      "switch_crew": "クルーを切り替え",
+      "switch_crew_unread": "クルーを切り替え、他に {{n}} 件の未読",
       "stopped": "停止中",
-      "show_all_crews": "すべてのクルーを表示",
-      "collapse_crews": "クルーを折りたたむ"
+      "pin_crews": "クルーをピン留め…",
+      "pinned": "ピン留め済み",
+      "pinned_no_room": "ピン留め済み、ヘッダーに空きがありません",
+      "no_room": "空きなし",
+      "pin_crew": "{{name}} をヘッダーにピン留め",
+      "unpin_crew": "{{name}} のピン留めを解除"
     },
     "instancesViewport": {
       "connecting": "接続中…",

@@ -5101,11 +5101,15 @@
       "tunnel_error": "Tunnel-Fehler",
       "tunnel_state": "Tunnel {{state}}.",
       "n_unread": "{{n}} ungelesen",
-      "switch_crew_active": "Crew wechseln, aktuell {{name}}",
-      "switch_crew_active_unread": "Crew wechseln, aktuell {{name}}, {{n}} ungelesen in anderen",
+      "switch_crew": "Crew wechseln",
+      "switch_crew_unread": "Crew wechseln, {{n}} ungelesen an anderer Stelle",
       "stopped": "gestoppt",
-      "show_all_crews": "Alle Crews anzeigen",
-      "collapse_crews": "Crews einklappen"
+      "pin_crews": "Crews anpinnen…",
+      "pinned": "angepinnt",
+      "pinned_no_room": "angepinnt, kein Platz in der Kopfzeile",
+      "no_room": "kein Platz",
+      "pin_crew": "{{name}} an die Kopfzeile anpinnen",
+      "unpin_crew": "{{name}} von der Kopfzeile loslösen"
     },
     "instancesViewport": {
       "connecting": "Wird verbunden…",
