@@ -56,6 +56,11 @@ def _make_app(
     async def _route(request: web.Request) -> web.Response:
         if seen_lengths is not None:
             seen_lengths.append(request.content_length)
+        # Inject dashboard-owner claims so deny_non_dashboard_caller passes
+        if "app" not in request:
+            request["app"] = ""
+        if "user" not in request:
+            request["user"] = "local-app"
         return await api_chat_slot_end_wait(request)
 
     app.router.add_post("/api/chat/slots/{slot}/end-wait", _route)

@@ -32,10 +32,19 @@ def _make_state(tmp_path):
     )
 
 
+@web.middleware
+async def _test_auth_middleware(request, handler):
+    if "app" not in request:
+        request["app"] = ""
+    if "user" not in request:
+        request["user"] = "local-app"
+    return await handler(request)
+
+
 def _make_app(state: DashboardState) -> web.Application:
     from kiro_crew.dashboard.chat import api_chat_slot_approve
 
-    app = web.Application()
+    app = web.Application(middlewares=[_test_auth_middleware])
     app["state"] = state
     app.router.add_post("/api/chat/slots/{slot}/approve", api_chat_slot_approve)
     return app

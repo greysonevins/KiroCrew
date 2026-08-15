@@ -520,7 +520,7 @@ class TestSendMessage:
         mock_slot = MagicMock()
         mock_slot.running = True
         mock_slot._queue = []
-        mock_slot.queue_append = lambda content: (
+        mock_slot.queue_append = lambda content, kind="": (
             mock_slot._queue.append({"id": "test", "content": content}) or "test"
         )
         state.get_slot = MagicMock(return_value=mock_slot)

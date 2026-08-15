@@ -15,7 +15,11 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from chat_test_helpers import _make_app, _make_state
 
-from kiro_crew.dashboard.chat_utils import _dequeue_next_system_message
+from kiro_crew.dashboard.chat_utils import (
+    CRON_NOTIFICATION_KIND,
+    SUBAGENT_COMPLETION_KIND,
+    _dequeue_next_system_message,
+)
 from kiro_crew.dashboard.state import (
     CRON_NOTIFY_PREFIX,
     SUBAGENT_COMPLETION_PREFIX,
@@ -53,7 +57,7 @@ class TestDequeueNextSystemMessage:
         """A queued sub-agent completion drains; a leading user message stays queued."""
         sa = f"{SUBAGENT_COMPLETION_PREFIX}\nAgent `a1` completed \u2705\nResult"
         slot = _ChatSlot("s1")
-        slot._queue = [{"id": "a", "content": "tangential question"}, {"id": "b", "content": sa}]
+        slot._queue = [{"id": "a", "content": "tangential question"}, {"id": "b", "content": sa, "kind": SUBAGENT_COMPLETION_KIND}]
 
         next_msg, consumed = _dequeue_next_system_message(slot)
 
@@ -66,7 +70,7 @@ class TestDequeueNextSystemMessage:
         """A queued cron notification drains; user messages stay queued."""
         cron = f"{CRON_NOTIFY_PREFIX}daily]: run report"
         slot = _ChatSlot("s1")
-        slot._queue = [{"id": "a", "content": "hi there"}, {"id": "b", "content": cron}]
+        slot._queue = [{"id": "a", "content": "hi there"}, {"id": "b", "content": cron, "kind": CRON_NOTIFICATION_KIND}]
 
         next_msg, consumed = _dequeue_next_system_message(slot)
 
@@ -78,7 +82,7 @@ class TestDequeueNextSystemMessage:
         """A leading sub-agent completion drains directly."""
         sa = f"{SUBAGENT_COMPLETION_PREFIX}\nAgent `x` completed \u2705\nDone"
         slot = _ChatSlot("s1")
-        slot._queue = [{"id": "a", "content": sa}, {"id": "b", "content": "user follow-up"}]
+        slot._queue = [{"id": "a", "content": sa, "kind": SUBAGENT_COMPLETION_KIND}, {"id": "b", "content": "user follow-up"}]
 
         next_msg, consumed = _dequeue_next_system_message(slot)
 

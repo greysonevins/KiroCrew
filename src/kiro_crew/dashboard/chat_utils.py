@@ -1500,6 +1500,13 @@ def is_system_injection(content: str) -> bool:
     """True when a queued message is a system injection (sub-agent completion
     or cron notification) rather than a plain user message.
 
+    .. deprecated::
+        Content-only classification is spoofable — a user typing the prefix
+        text would be misclassified. Prefer :func:`is_system_injection_item`
+        which checks the structural ``kind`` tag first. This function is kept
+        only as a backwards-compatibility fallback for queue items enqueued
+        before the kind tag was introduced.
+
     Single source of truth for the predicate that decides which queued
     messages keep draining during a sub-agent run (`_dequeue_next_system_message`),
     which break a user-message merge (`_dequeue_next_message`), and which must
@@ -1515,6 +1522,17 @@ def is_system_injection(content: str) -> bool:
 
 #: Structural queue-entry kind for runner-injected recovery instructions.
 SYNTHETIC_RECOVERY_KIND = "synthetic_recovery"
+
+#: Structural queue-entry kinds for system injections.  Classification by kind
+#: tag — set at enqueue time — is unforgeable: a user typing the same prefix
+#: text will not have the kind tag and will correctly classify as plain input.
+SUBAGENT_COMPLETION_KIND = "subagent_completion"
+CRON_NOTIFICATION_KIND = "cron_notification"
+
+#: All system-injection kinds (for set-membership checks).
+_SYSTEM_INJECTION_KINDS = frozenset(
+    (SUBAGENT_COMPLETION_KIND, CRON_NOTIFICATION_KIND, SYNTHETIC_RECOVERY_KIND)
+)
 
 
 def is_synthetic_recovery_item(item: dict) -> bool:
@@ -1574,13 +1592,20 @@ def is_synthetic_payload_item(item: dict) -> bool:
 def is_system_injection_item(item: dict) -> bool:
     """Item-aware system-injection predicate for queue-entry consumers.
 
+    Prefers the **structural** ``kind`` tag (set at enqueue time, unforgeable)
+    over content-prefix inspection. Content fallback is removed to fully close
+    the spoofing gap — classification is exclusively by kind tag.
+
     Synthetic recovery instructions are orchestration, not user speech: they
     must BREAK a user-message merge (folding one into a "[N queued messages
     merged]" turn would flip it back into user-authored, persisted,
     channel-mirrored history), keep draining during sub-agent runs, and never
     consume the session-reset notice — same treatment as sub-agent completion
     and cron injections."""
-    return is_synthetic_recovery_item(item) or is_system_injection(item["content"])
+    kind = item.get("kind", "")
+    if kind in _SYSTEM_INJECTION_KINDS:
+        return True
+    return False
 
 
 def _dequeue_next_message(slot, merge_enabled: bool) -> tuple:

@@ -5247,6 +5247,36 @@ _LINK_CREATE_VERBS: frozenset[str] = frozenset({"ln", "link"})
 # since that takes a delimiter word, not a path.
 _REDIR_PREFIX_RE = re.compile(r"^\d*(?:>>?|<(?!<))")
 
+# Matches unresolved shell variables ($VAR, ${VAR}) that normalize_shell_command
+# did NOT expand.  Only $HOME/${HOME} and ~ are expanded; anything else means the
+# real path cannot be verified, so we deny.
+_UNRESOLVED_VAR_RE = re.compile(r"\$[A-Za-z_{]")
+
+
+def _prefix_could_reach_sensitive(prefix: str) -> bool:
+    """True if *prefix* is sensitive itself OR is a parent of sensitive paths.
+
+    Handles both cases:
+    - prefix IS a sensitive path (e.g. ``~/.aws`` expanded to ``/home/u/.aws``)
+    - prefix is a PARENT containing sensitive leaves (e.g. ``/home/u/.kiro/crew``
+      contains ``security_policy.json``)
+    """
+    if is_sensitive_path(prefix):
+        return True
+    # Check if any sensitive home-relative path starts with prefix's home-relative part
+    home = os.path.expanduser("~")
+    if not prefix.startswith(home):
+        return False
+    rel = prefix[len(home):].lstrip("/")
+    if not rel:
+        return False  # bare home dir is not sensitive
+    # Check if prefix is a parent of any sensitive home dir
+    rel_slash = rel + "/"
+    for sensitive_dir in _SENSITIVE_HOME_DIRS:
+        if sensitive_dir.startswith(rel_slash) or sensitive_dir == rel:
+            return True
+    return False
+
 
 def is_sensitive_bash_command(command: str) -> str | None:
     """Check if a bash command reads sensitive paths, accesses IMDS, or leaks env creds.
@@ -5357,6 +5387,25 @@ def _check_sensitive_via_normalizer(command: str) -> str | None:
             # Only check tokens that look like filesystem paths
             if not _is_path_like(cand):
                 continue
+            # Deny if token still contains an unresolved shell variable after
+            # normalization AND the path prefix (before the variable) is a
+            # parent of any sensitive path.  This catches indirection attacks
+            # like `F=security_policy.json; cat ~/.kiro/crew/$F` while
+            # allowing benign uses like `A=logs; tar czf /tmp/x.tgz ~/$A`.
+            if _UNRESOLVED_VAR_RE.search(cand):
+                # Extract the prefix before the first unresolved variable
+                var_match = _UNRESOLVED_VAR_RE.search(cand)
+                assert var_match is not None  # for mypy; guarded by `if` above
+                var_pos = var_match.start()
+                prefix = cand[:var_pos].rstrip("/")
+                # Deny if: (a) no prefix at all — the variable IS the path
+                # start, so we can't verify anything (e.g. `$H/.aws/creds`);
+                # or (b) the prefix is a parent of sensitive paths.
+                if not prefix or _prefix_could_reach_sensitive(prefix):
+                    return (
+                        "Blocked: unresolved shell variable in path position — "
+                        f"cannot verify safety (token: {cand[:80]})"
+                    )
             # is_sensitive_path handles symlink resolution, traversal, ~ expansion,
             # $HOME expansion, and all sensitive directory checks
             if is_sensitive_path(cand):

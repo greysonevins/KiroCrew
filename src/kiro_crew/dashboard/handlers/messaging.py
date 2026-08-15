@@ -32,6 +32,7 @@ from kiro_crew.dashboard.channel_folders import (
 )
 from kiro_crew.dashboard.chat_persistence import _rehydrate_slot_from_history
 from kiro_crew.dashboard.chat_utils import (
+    CRON_NOTIFICATION_KIND,
     _remove_queued_by_id,
     dashboard_slot_key,
     mint_options_token,
@@ -1299,7 +1300,7 @@ async def api_send_message(request: web.Request) -> web.Response:
                                 "Queue full for slot %s — evicting oldest message", slot_key
                             )
                             _remove_queued_by_id(slot.messages, evicted["id"])
-                        qid = slot.queue_append(wrapped)
+                        qid = slot.queue_append(wrapped, kind=CRON_NOTIFICATION_KIND)
                         _cls = json.loads(inject_cls)
                         _cls["queue_id"] = qid
                         slot.append("queued", wrapped, json.dumps(_cls))

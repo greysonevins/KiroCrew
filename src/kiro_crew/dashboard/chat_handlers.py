@@ -1024,6 +1024,9 @@ async def api_chat_slot_detail(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return web.json_response({"error": "not found"}, status=404)
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_detail")
+    if denied is not None:
+        return denied
 
     limit_raw = request.query.get("limit")
     before_raw = request.query.get("before")
@@ -1658,6 +1661,9 @@ async def api_chat_slot_stop(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return _slot_not_found()
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_stop")
+    if denied is not None:
+        return denied
     # Before ANY side effect — the escalation branch below clears the queue and
     # drops pending steers before it reaches stop_turn, so a guard placed later
     # would still let a foreign caller mutate the slot.
@@ -2048,6 +2054,9 @@ async def api_chat_slot_end_wait(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return web.json_response({"error": "not found", "code": "slot_not_found"}, status=404)
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_end_wait")
+    if denied is not None:
+        return denied
     try:
         body = await request.json() if request.content_length else {}
     except Exception:
@@ -2094,6 +2103,9 @@ async def api_chat_slot_interrupt(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return _slot_not_found()
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_interrupt")
+    if denied is not None:
+        return denied
     # Before the _stop_state claim and the queue promotion below, both of which
     # mutate the slot ahead of stop_turn.
     # Resolved once, before the request-body await below, and used for both the
@@ -2214,6 +2226,9 @@ async def api_chat_slot_queue_cancel(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return web.json_response({"error": "not found"}, status=404)
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_queue_cancel")
+    if denied is not None:
+        return denied
     content = slot.queue_remove_by_id(queue_id)
     if content is None:
         return web.json_response({"error": "queue item not found"}, status=404)
@@ -2247,6 +2262,9 @@ async def api_chat_slot_queue_edit(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return web.json_response({"error": "not found"}, status=404)
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_queue_edit")
+    if denied is not None:
+        return denied
     try:
         body = await request.json()
     except Exception:
@@ -2285,6 +2303,9 @@ async def api_chat_slot_queue_reorder(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return web.json_response({"error": "not found"}, status=404)
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_queue_reorder")
+    if denied is not None:
+        return denied
     try:
         body = await request.json()
     except Exception:
@@ -2820,6 +2841,9 @@ async def api_chat_slot_agent(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return web.json_response({"error": "not found"}, status=404)
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_agent")
+    if denied is not None:
+        return denied
     try:
         body = await request.json()
     except Exception:
@@ -3080,6 +3104,9 @@ async def api_chat_slot_model(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return web.json_response({"error": "not found"}, status=404)
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_model")
+    if denied is not None:
+        return denied
     try:
         body = await request.json()
     except Exception:
@@ -3228,6 +3255,9 @@ async def api_chat_slot_reasoning_effort(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return web.json_response({"error": "not found"}, status=404)
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_reasoning_effort")
+    if denied is not None:
+        return denied
     try:
         body = await request.json()
     except Exception:
@@ -3297,6 +3327,9 @@ async def api_chat_slot_workspace(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return web.json_response({"error": "not found"}, status=404)
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_workspace")
+    if denied is not None:
+        return denied
     try:
         body = await request.json()
     except Exception:
@@ -3325,6 +3358,9 @@ async def api_chat_slot_project(request: web.Request) -> web.Response:
     slot = state._slots.get(name)
     if not slot:
         return web.json_response({"error": "not found"}, status=404)
+    denied = _deny_cross_app_slot_access(request, slot, name, "slot_project")
+    if denied is not None:
+        return denied
     try:
         body = await request.json()
     except Exception:
@@ -3410,6 +3446,37 @@ def _redact_followup_item(item: dict) -> dict:
         if scrubbed == branch:
             out["branch"] = branch
     return out
+
+
+def _deny_cross_app_slot_access(
+    request: web.Request, slot, name: str, operation: str
+) -> web.Response | None:
+    """Deny app tokens acting on slots they don't own (App Kit §5.2).
+
+    Returns a 404 response if the caller is an app that doesn't own this slot,
+    or None to proceed. Dashboard users (empty request_app) always pass.
+    Anti-enumeration: uses 404 not 403 (CWE-204).
+    """
+    request_app = request.get("app", "")
+    if not request_app:
+        return None  # Dashboard user -- no restriction
+    if slot._app and request_app == slot._app:
+        return None  # App owns this slot
+    reason = (
+        "app does not own this slot" if slot._app else "app cannot access unscoped slots"
+    )
+    try:
+        sel().log_api_access(
+            caller=request_app,
+            operation=operation,
+            outcome="denied",
+            source="app_isolation",
+            resources=f"slot={name}",
+            error=reason,
+        )
+    except Exception:
+        pass
+    return web.json_response({"error": "not found", "code": "slot_not_found"}, status=404)
 
 
 def deny_non_dashboard_caller(request: web.Request, operation: str) -> web.Response | None:
@@ -3891,6 +3958,9 @@ async def api_chat_mode(request: web.Request) -> web.Response:
     pending approval — it preemptively sets the mode for future tools.
     """
     state: DashboardState = request.app["state"]
+    denied = deny_non_dashboard_caller(request, "chat_mode")
+    if denied is not None:
+        return denied
     try:
         body = await request.json()
     except Exception:
@@ -4088,6 +4158,9 @@ def _get_pattern_from_pending(slot: _ChatSlot, request_id: str, field: str) -> s
 async def api_chat_slot_approve(request: web.Request) -> web.Response:
     """POST /api/chat/slots/{slot}/approve — resolve a pending tool approval."""
     state: DashboardState = request.app["state"]
+    denied = deny_non_dashboard_caller(request, "chat_slot_approve")
+    if denied is not None:
+        return denied
     name = request.match_info["slot"]
     slot = state._slots.get(name)
     if not slot:

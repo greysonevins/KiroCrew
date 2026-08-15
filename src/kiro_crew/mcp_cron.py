@@ -1452,6 +1452,31 @@ def _call_tool(name: str, raw_args: dict[str, Any]) -> str:
     )
 
 
+def _check_cron_job_ownership(svc: "CronService", job_id: str) -> str | None:
+    """Return an error string if the caller doesn't own this job, else None."""
+    session_key = _resolve_session_key()
+    is_cli = os.environ.get("KIROCREW_CLI", "") == "1"
+    if is_cli:
+        return None  # CLI admin bypass
+    if not session_key:
+        return None  # No session context (single-user local mode) — allow
+    job = svc.get_job(job_id)
+    if not job:
+        return f"Job not found: {job_id}"
+    if job.session_key != session_key:
+        try:
+            sel().log_tool_invocation(
+                session_key=session_key,
+                tool_name=f"cron:{job_id}",
+                outcome="denied",
+                error="cross-session ownership check failed",
+            )
+        except Exception:
+            pass
+        return f"Error: job not found: {job_id}"  # Anti-enumeration + Error: prefix
+    return None
+
+
 def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
     """Execute a cron tool (post-validation)."""
     svc = CronService(base_dir=config_dir())
@@ -1462,6 +1487,13 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
         jobs = svc.list_jobs(include_disabled=True)
         if not jobs:
             return "No cron jobs."
+        # Ownership filter: non-CLI callers see only their own jobs
+        session_key = _resolve_session_key()
+        is_cli = os.environ.get("KIROCREW_CLI", "") == "1"
+        if not is_cli and session_key:
+            jobs = [j for j in jobs if j.session_key == session_key]
+            if not jobs:
+                return "No cron jobs."
         # Drill-in: ids filter forces full bodies for matching jobs only.
         if ids_filter:
             id_set = set(ids_filter)
@@ -1612,6 +1644,10 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
 
     if name == "cron_update":
         jid = args["job_id"]
+        # Ownership check
+        own_err = _check_cron_job_ownership(svc, jid)
+        if own_err:
+            return own_err
         kwargs: dict[str, Any] = {}
         for key in ("name", "message"):
             if key in args and args[key]:
@@ -1696,6 +1732,10 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
 
     if name == "cron_remove":
         jid = args["job_id"]
+        # Ownership check
+        own_err = _check_cron_job_ownership(svc, jid)
+        if own_err:
+            return own_err
         try:
             removed = svc.remove_job(jid)
         except CronStoreBusy:
@@ -1750,6 +1790,10 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
 
     if name == "cron_pause":
         jid = args["job_id"]
+        # Ownership check
+        own_err = _check_cron_job_ownership(svc, jid)
+        if own_err:
+            return own_err
         try:
             paused = svc.enable_job(jid, enabled=False)
         except CronStoreBusy:
@@ -1760,6 +1804,10 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
 
     if name == "cron_resume":
         jid = args["job_id"]
+        # Ownership check
+        own_err = _check_cron_job_ownership(svc, jid)
+        if own_err:
+            return own_err
         try:
             resumed = svc.enable_job(jid, enabled=True)
         except CronStoreBusy:
@@ -1770,6 +1818,10 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
 
     if name == "cron_trigger":
         jid = args["job_id"]
+        # Ownership check
+        own_err = _check_cron_job_ownership(svc, jid)
+        if own_err:
+            return own_err
         port = DASHBOARD_PORT
         secret_path = config_dir() / ".local_secret"
         ok, msg = trigger_cron_job(jid, port, secret_path)

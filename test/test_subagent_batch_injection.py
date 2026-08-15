@@ -17,7 +17,7 @@ from chat_test_helpers import _make_state
 
 from kiro_crew.dashboard.chat import _dequeue_next_message
 from kiro_crew.dashboard.chat_runner import _start_next_queued_turn
-from kiro_crew.dashboard.chat_utils import is_system_injection
+from kiro_crew.dashboard.chat_utils import SUBAGENT_COMPLETION_KIND, is_system_injection
 from kiro_crew.dashboard.state import (
     SUBAGENT_BATCH_COMPLETION_PREFIX,
     SUBAGENT_COMPLETION_PREFIX,
@@ -60,7 +60,7 @@ class TestBatchDigestQueueSemantics:
         slot = _ChatSlot("s1")
         slot._queue = [
             {"id": "a", "content": "fix the bug"},
-            {"id": "b", "content": BATCH_DIGEST},
+            {"id": "b", "content": BATCH_DIGEST, "kind": SUBAGENT_COMPLETION_KIND},
         ]
         for item in slot._queue:
             slot.append("queued", item["content"], "msg msg-queued")
@@ -75,7 +75,7 @@ class TestBatchDigestQueueSemantics:
     async def test_drained_batch_digest_lands_under_the_subagent_role(self, tmp_path) -> None:
         state = _make_state(tmp_path)
         slot = state.get_or_create_slot("batch-role")
-        slot.queue_append(BATCH_DIGEST)
+        slot.queue_append(BATCH_DIGEST, kind=SUBAGENT_COMPLETION_KIND)
 
         with patch("kiro_crew.dashboard.chat_runner.spawn_guarded_turn") as spawn:
             spawn.return_value = MagicMock()

@@ -83,6 +83,8 @@ from kiro_crew.dashboard import cautious_boot, start_dashboard
 from kiro_crew.dashboard.chat_persistence import rehydrate_slot_from_history_async
 from kiro_crew.dashboard.chat_runner import _resolve_channel_target, _run_chat
 from kiro_crew.dashboard.chat_utils import (
+    CRON_NOTIFICATION_KIND,
+    SUBAGENT_COMPLETION_KIND,
     dashboard_slot_key,
     mint_options_token,
     remember_slack_options,
@@ -2221,7 +2223,7 @@ class GatewayOrchestrator:
                         wrapped = f'[Cron notification: "{label}"]\n{message}\n[/Cron notification]'
                         inject_cls = json.dumps({"cronLabel": label})
                         if slot.running:
-                            qid = slot.queue_append(wrapped)
+                            qid = slot.queue_append(wrapped, kind=CRON_NOTIFICATION_KIND)
                             _cls = json.loads(inject_cls)
                             _cls["queue_id"] = qid
                             slot.append("queued", wrapped, json.dumps(_cls))
@@ -5160,7 +5162,9 @@ class GatewayOrchestrator:
                                 # drained row is a card without re-parsing the
                                 # prose (#1792); _start_next_queued_turn reads them.
                                 _injection_slot.queue_append(
-                                    announce, meta={SUBAGENT_COMPLETION_META_KEY: sub_meta}
+                                    announce,
+                                    kind=SUBAGENT_COMPLETION_KIND,
+                                    meta={SUBAGENT_COMPLETION_META_KEY: sub_meta},
                                 )
                                 self.dashboard_state.push_slots_update()
                                 logger.info("Subagent %s → queued in %s", info.id, _slot_name)

@@ -108,7 +108,21 @@ def _make_app(state: DashboardState) -> web.Application:
         api_chat_slots_cleanup,
     )
 
-    app = web.Application()
+    @web.middleware
+    async def _test_auth_middleware(request: web.Request, handler):
+        """Simulate token_auth_middleware for tests: dashboard owner claims.
+
+        Only sets defaults if not already populated by a test-specific
+        middleware inserted earlier (e.g. app-isolation tests that inject
+        a specific app identity).
+        """
+        if "app" not in request:
+            request["app"] = ""  # dashboard user, not an app
+        if "user" not in request:
+            request["user"] = "local-app"  # recognized as owner
+        return await handler(request)
+
+    app = web.Application(middlewares=[_test_auth_middleware])
     app["state"] = state
     app.router.add_post("/api/chat", api_chat)
     app.router.add_get("/api/chat/slots", api_chat_slots)

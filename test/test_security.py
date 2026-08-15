@@ -3693,6 +3693,44 @@ class TestIsSensitiveBashCommand:
         assert _check_imds_access("curl http://93.184.216.34/") is None
         assert canonicalize_ip("8.8.8.8") == "8.8.8.8"
 
+    # ── Unresolved shell-variable indirection bypass ──
+
+    def test_variable_indirection_denied(self) -> None:
+        """Shell-variable indirection must not bypass the sensitive-path gate."""
+        cmd = "F=security_policy.json; cat ~/.kiro/crew/$F"
+        result = security.is_sensitive_bash_command(cmd)
+        assert result is not None
+        assert "unresolved shell variable" in result.lower() or "sensitive" in result.lower()
+
+    def test_variable_indirection_variants(self) -> None:
+        """Multiple forms of unresolved variables in path position are blocked."""
+        cases = [
+            "cat ${HOME}/.kiro/crew/${F}",
+            "cat ~/.aws/$PROFILE/credentials",
+            "cat ~/.ssh/$KEYNAME",
+        ]
+        for cmd in cases:
+            result = security.is_sensitive_bash_command(cmd)
+            assert result is not None, f"Expected denial for: {cmd}"
+
+    def test_normal_home_expansion_still_works(self) -> None:
+        """$HOME expansion to sensitive paths is still caught (regression)."""
+        cmd = "cat $HOME/.aws/config"
+        result = security.is_sensitive_bash_command(cmd)
+        assert result is not None
+
+    def test_non_path_variables_allowed(self) -> None:
+        """Variables that aren't in path-like tokens don't trigger the gate."""
+        # echo $USER has no / so _is_path_like is False
+        safe_cases = [
+            "echo $USER",
+            "echo hello",
+            "ls /tmp",
+        ]
+        for cmd in safe_cases:
+            result = security.is_sensitive_bash_command(cmd)
+            assert result is None, f"Unexpected denial for: {cmd}"
+
 
 class TestWindowsPathShapes:
     """Native Windows path spellings must be recognized as path-like so the

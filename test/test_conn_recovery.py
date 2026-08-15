@@ -10,6 +10,7 @@ from chat_test_helpers import _make_state
 from kiro_crew.dashboard.chat_utils import (
     _BUSY_RECOVER_MSG,
     _CONN_RECOVER_MSG,
+    CRON_NOTIFICATION_KIND,
     SYNTHETIC_RECOVERY_KIND,
     RecoveryPayload,
     ResetCause,
@@ -125,7 +126,7 @@ async def test_cron_injection_preserves_pending_session_reset_notice(tmp_path, m
     slot = state.get_or_create_slot("cron-during-reset")
     slot._stopping = True
     cron_message = f'{CRON_NOTIFY_PREFIX}"daily"]\nrun report'
-    slot.queue_insert(0, cron_message)
+    slot.queue_insert(0, cron_message, kind=CRON_NOTIFICATION_KIND)
     mock_run = AsyncMock()
     monkeypatch.setattr(chat_runner, "_run_chat", mock_run)
 
