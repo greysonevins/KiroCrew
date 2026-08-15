@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import enum
+import json
 import logging
 import os
 import re
@@ -75,6 +76,7 @@ from kiro_crew.instances.constants import DEFAULT_PROBE_INTERVAL_SECS as _PROBE_
 from kiro_crew.instances.constants import (
     DEFAULT_RECOVER_BACKOFF_MAX_SECS as _RECOVER_BACKOFF_MAX_SECS,
 )
+from kiro_crew.instances.constants import DEFAULT_SEARCH_PROXY_TIMEOUT_SECS as _SEARCH_PROXY_TIMEOUT
 from kiro_crew.instances.constants import DEFAULT_SESSION_TRANSFER_TIMEOUT_SECS as _TRANSFER_TIMEOUT
 from kiro_crew.instances.constants import (
     DEFAULT_SSM_CONNECT_TIMEOUT_SECS as _DEFAULT_SSM_CONNECT_TIMEOUT_SECS,
@@ -90,6 +92,7 @@ from kiro_crew.instances.constants import (
 from kiro_crew.instances.constants import (
     DIAGNOSTICS_CONNECT_TIMEOUT_CAP_SECS as _DIAGNOSTICS_CONNECT_TIMEOUT_CAP_SECS,
 )
+from kiro_crew.instances.constants import SEARCH_REPLY_MAX_BYTES as _SEARCH_REPLY_MAX_BYTES
 from kiro_crew.instances.diagnostics import diagnose_instance, diagnose_instance_ssm
 from kiro_crew.instances.port_allocator import PortAllocator, _is_port_free
 from kiro_crew.instances.registry import _UNALLOCATED_PORT, Instance, InstancesRegistry
@@ -1820,6 +1823,122 @@ class SshTunnelManager:
         return False, {
             "error": "peer rejected the credential",
             "code": "transfer_unauthorized",
+        }
+
+    async def search_sessions_remote(
+        self, instance_id: str, query: str, limit: int
+    ) -> tuple[bool, dict]:
+        """GET a connected peer's ``/api/sessions/search`` over its tunnel.
+
+        Returns ``(ok, payload)``: on success *payload* is the peer's JSON reply
+        (``{"sessions": [...]}``); on failure it carries ``error`` and a
+        machine-readable ``code`` so the aggregator can tell a stale credential
+        from an unreachable peer.
+
+        Runs entirely over the already-open forward — **no SSH spawn** — and
+        follows :meth:`send_session_bundle`'s credential rules: **the token
+        never leaves this object** (``connect``/``refresh-token`` stay the only
+        routes where one crosses the API boundary), it travels as the
+        port-scoped cookie so it cannot land in the peer's access log, and a
+        401/403 gets exactly one transparent re-mint retry — a retained
+        credential can go stale while the tunnel stays CONNECTED.
+        """
+        st = self.status(instance_id)
+        if st is None or st.state is not TunnelState.CONNECTED:
+            return False, {
+                "error": "instance is not connected",
+                "code": "search_peer_not_connected",
+            }
+        local_port = st.local_port
+        if local_port <= 0:
+            return False, {
+                "error": "no live credential for this instance; reconnect it",
+                "code": "search_no_credential",
+            }
+        url = f"http://{_LOOPBACK}:{int(local_port)}/api/sessions/search"
+        # Port-scoped cookie name, for the same reason as send_session_bundle:
+        # the peer keys its cookie on the port the CLIENT connected to.
+        cookie_name = f"mc_token_{int(local_port)}"
+        timeout = aiohttp.ClientTimeout(total=_SEARCH_PROXY_TIMEOUT)
+        reminted = False
+        for _attempt in range(2):
+            token = self._tokens.get(instance_id, "")
+            if not token:
+                return False, {
+                    "error": "no live credential for this instance; reconnect it",
+                    "code": "search_no_credential",
+                }
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(
+                        url,
+                        params={"q": query, "limit": str(int(limit))},
+                        headers={"Cookie": f"{cookie_name}={token}"},
+                        # The tunnel endpoint is the ONLY legitimate target. A
+                        # compromised peer answering 30x would otherwise make
+                        # aiohttp fetch an attacker-chosen URL FROM THE HUB
+                        # (SSRF into its loopback control planes).
+                        allow_redirects=False,
+                    ) as resp:
+                        if resp.status in (401, 403):
+                            if not reminted and await self.refresh_token(instance_id):
+                                reminted = True
+                                continue  # retry once with the fresh credential
+                            return False, {
+                                "error": "peer rejected the credential",
+                                "code": "search_unauthorized",
+                            }
+                        if not 200 <= resp.status < 300:
+                            return False, {
+                                "error": f"peer refused the search (HTTP {resp.status})",
+                                "code": "search_peer_refused",
+                            }
+                        # Byte-cap BEFORE decoding: resp.json() buffers the whole
+                        # body first, so a hostile/broken peer streaming an
+                        # unbounded reply could exhaust hub memory before any
+                        # per-field clamp runs. StreamReader.read(n) returns as
+                        # soon as ANY buffered data exists, so a single call can
+                        # yield a prefix of a multi-chunk reply — accumulate to
+                        # EOF, refusing the moment the cap is crossed. An honest
+                        # reply (<=200 clamped rows) sits far below the cap.
+                        chunks: list[bytes] = []
+                        received = 0
+                        oversized = False
+                        async for chunk in resp.content.iter_chunked(65536):
+                            received += len(chunk)
+                            if received > _SEARCH_REPLY_MAX_BYTES:
+                                oversized = True
+                                break
+                            chunks.append(chunk)
+                        if oversized:
+                            return False, {
+                                "error": "peer search reply exceeds the size cap",
+                                "code": "search_malformed_reply",
+                            }
+                        try:
+                            payload = json.loads(b"".join(chunks))
+                        except Exception:
+                            payload = None
+                        if not isinstance(payload, dict):
+                            return False, {
+                                "error": "peer returned a malformed search reply",
+                                "code": "search_malformed_reply",
+                            }
+                        return True, payload
+            except Exception as e:
+                logger.info(
+                    "Federated session search to %s failed (%s)",
+                    instance_id,
+                    type(e).__name__,  # never the credential, never the query
+                )
+                return False, {
+                    "error": f"could not reach the instance ({type(e).__name__})",
+                    "code": "search_unreachable",
+                }
+        # Both attempts came back unauthorized.
+        return False, {
+            "error": "peer rejected the credential",
+            "code": "search_unauthorized",
         }
 
     def token_ttl_remaining(self, instance_id: str) -> int | None:

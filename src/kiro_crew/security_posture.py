@@ -191,6 +191,18 @@ _REDACTION_SINKS: tuple[tuple[str, str, str], ...] = (
         "never rewritten) and refused whole if any record does not parse.",
     ),
     (
+        "Federated session search",
+        "dashboard/handlers_instances.py",
+        "Rows returned by GET /api/instances/search-sessions, straight to the "
+        "browser. Two distinct inputs make it an output boundary of its own: "
+        "PEER rows are untrusted remote JSON (allowlist-reshaped, then title/"
+        "snippet re-redacted locally — the peer claims to have scrubbed, this "
+        "hub does not take its word for it), and LOCAL rows come from "
+        "conversation_log.search_sessions directly, bypassing the "
+        "/api/sessions/search handler where the local redaction normally runs, "
+        "so the same title/snippet scrub is applied here.",
+    ),
+    (
         "Profile artifact",
         "perf_sampler.py",
         "Folded-stack profiles written by `kirocrew perf sample`. Frame labels are "

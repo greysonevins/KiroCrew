@@ -21,16 +21,19 @@ import asyncio
 import dataclasses
 import functools
 import logging
+import math
 from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+import kiro_crew.dashboard.handlers as _h
 from kiro_crew.config.loader import KiroCrewConfig
 from kiro_crew.dashboard.session_transfer import (
     SnapshotUnstable,
     build_transfer_bundle_async,
     local_instance_label,
 )
+from kiro_crew.history import SEARCH_MIN_CHARS
 from kiro_crew.instances.registry import (
     DuplicateInstanceError,
     InstanceNotFoundError,
@@ -39,12 +42,22 @@ from kiro_crew.instances.registry import (
     InvalidInstanceError,
     validate_ttl,
 )
+from kiro_crew.instances.ssh_tunnel_manager import TunnelState
 from kiro_crew.sel import sel
+from kiro_crew.validation import sanitize_string
 
 if TYPE_CHECKING:
     from kiro_crew.dashboard.state import DashboardState
 
 logger = logging.getLogger(__name__)
+
+# Per-string ceiling for fields in a PEER's federated-search reply. A peer is
+# untrusted input (see api_instances_search_sessions), and without a clamp a
+# hostile or broken remote could ship megabyte titles/snippets straight to the
+# browser — and feed the redaction regexes unbounded input on the way. Sized
+# well above any honest value (local snippets are a short match window and
+# titles are one line) so it only ever bites on garbage.
+_PEER_FIELD_MAX_CHARS = 2048
 
 
 def _audit(operation: str, outcome: str, *, request_id: str = "", error: str = "") -> None:
@@ -562,6 +575,188 @@ async def api_instances_restart(request: web.Request) -> web.Response:
         return web.json_response(result)
     _audit("restart", "failure", request_id=instance_id, error=result.get("message", ""))
     return web.json_response(result, status=502)
+
+
+async def api_instances_search_sessions(request: web.Request) -> web.Response:
+    """GET /api/instances/search-sessions — federated session search.
+
+    Query params mirror ``/api/sessions/search`` (``q`` min 2 chars, ``limit``
+    default 50 / max 200). Fans the query out to every CONNECTED instance's own
+    ``/api/sessions/search`` (concurrently, over the already-open tunnels — the
+    minted tokens never leave ``SshTunnelManager``) and runs the local search in
+    the same gather, then rank-interleaves the sources: position k of the reply
+    cycles through each source's k-th best hit, local first. Interleaving needs
+    no cross-instance score wire format (each gateway may run a different
+    ranking version), keeps every source represented in the top rows, and
+    preserves each source's own order.
+
+    Rows from a peer carry ``instance_id`` + ``instance_name``; local rows carry
+    neither, so the reply shape for a hub with no peers degrades to exactly the
+    local search's. Unreachable/refusing peers never fail the request: they are
+    reported in ``unreachable`` as ``{id, name, code}`` so the UI can say "N
+    instances unreachable" instead of silently narrowing the search.
+
+    Same gate as every instances route (owner-only, non-Slack,
+    ``instances.enabled``); peers' replies are untrusted input and are re-shaped
+    and re-redacted locally before they reach the browser.
+    """
+    denied = _guard(request, "search_sessions")
+    if denied is not None:
+        return denied
+    # STRICTER than _guard for this route: _guard's identity check is
+    # deliberately permissive enough for send-session's app path (an app token
+    # sets request["user"] and the transfer confines it with a per-slot
+    # ownership check downstream). A bulk read has no per-slot confinement to
+    # lean on — it discloses EVERY local and remote session's titles/snippets —
+    # so it requires the positively-identified OWNER: not an app token, and not
+    # a Slack user who minted a dashboard token via `!dashboard` (app == "" but
+    # a non-owner subject).
+    from kiro_crew.dashboard.handlers.source_providers import is_owner_dashboard_request
+
+    if not is_owner_dashboard_request(request):
+        _audit("search_sessions", "denied", error="non-owner identity rejected")
+        return web.json_response(
+            {"error": "federated session search is owner-only", "code": "owner_only"},
+            status=403,
+        )
+    state: DashboardState = request.app["state"]
+    q = sanitize_string(request.query.get("q", "")).strip()[:256]
+    if len(q) < SEARCH_MIN_CHARS:
+        # §6: every guarded call emits an SEL event, success and denial alike.
+        # A sub-threshold query still passed the permission gate, so the
+        # decision is recorded even though no search runs.
+        _audit("search_sessions", "success", request_id="short-query")
+        return web.json_response({"sessions": [], "unreachable": []})
+    try:
+        limit = max(1, min(int(request.query.get("limit", "50")), 200))
+    except (TypeError, ValueError):
+        limit = 50
+
+    mgr = getattr(state, "instances_manager", None)
+    connected: list[str] = []
+    peer_calls = []
+    if mgr is not None:
+        connected = [
+            iid
+            for iid, st in mgr.status_all().items()
+            if getattr(st, "state", None) is TunnelState.CONNECTED
+        ]
+        peer_calls = [mgr.search_sessions_remote(iid, q, limit) for iid in connected]
+
+    async def _local() -> list[dict]:
+        if not state.conversation_log:
+            return []
+        return await asyncio.get_running_loop().run_in_executor(
+            None, state.conversation_log.search_sessions, q, limit
+        )
+
+    results = await asyncio.gather(_local(), *peer_calls, return_exceptions=True)
+
+    # Snapshot instance names ONCE, off the loop, before the merge. registry.get
+    # acquires a threading lock and re-reads instances.json per call — a lock a
+    # to_thread mutation worker may hold across its fsync — so resolving names
+    # inline per peer row (up to limit x peers per keystroke) could freeze the
+    # event loop for the fsync's duration. Same rule as every other registry
+    # touch in these handlers (see api_instances_list).
+    names: dict[str, str] = {}
+    if connected:
+        try:
+            reg = _registry(state)
+            names = {i.id: i.name for i in await asyncio.to_thread(reg.list)}
+        except Exception:
+            names = {}  # badge degrades to the instance id
+
+    def _name(iid: str) -> str:
+        return names.get(iid) or iid
+
+    def _clean(row: object, iid: str) -> dict | None:
+        """Re-shape one untrusted peer row: allowlist keys, coerce, re-redact."""
+        if not isinstance(row, dict):
+            return None
+        key = row.get("key")
+        if not isinstance(key, str) or not key or len(key) > _PEER_FIELD_MAX_CHARS:
+            return None
+        out: dict = {"key": key, "instance_id": iid, "instance_name": _name(iid)}
+        for field in ("title", "snippet", "agent", "created", "folder_id", "memory_mode"):
+            value = row.get(field)
+            if isinstance(value, str) and value:
+                # Length clamp BEFORE redaction: a hostile/broken peer must not
+                # ship megabyte strings to the browser (or feed the redaction
+                # regexes unbounded input).
+                value = value[:_PEER_FIELD_MAX_CHARS]
+                if field in ("title", "snippet"):
+                    value, _ = _h.redact_exfiltration_urls(value)
+                    value, _ = _h.redact_credentials(value)
+                out[field] = value
+        for field in ("modified", "messages"):
+            value = row.get(field)
+            # bool is an int subclass and 1e309 is a float — but True/Infinity
+            # in these fields is peer garbage, and a non-finite value makes
+            # json.dumps emit bare `Infinity`, which the browser's JSON.parse
+            # rejects, losing the WHOLE federated response to one bad row.
+            # isfinite itself raises OverflowError on an int too large for
+            # float (peer JSON carries arbitrary-precision ints), so that
+            # garbage is dropped the same way rather than crashing the merge.
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                try:
+                    if math.isfinite(value):
+                        out[field] = value
+                except OverflowError:
+                    pass
+        return out
+
+    sources: list[list[dict]] = []
+    unreachable: list[dict] = []
+    local_rows = results[0]
+    if isinstance(local_rows, list):
+        # Local redaction: /api/sessions/search redacts title/snippet in its
+        # HANDLER, and this endpoint calls conversation_log.search_sessions
+        # directly, bypassing that handler — so the same redaction must run
+        # here before the rows reach the browser.
+        redacted_local: list[dict] = []
+        for row in local_rows:
+            for field in ("title", "snippet"):
+                value = row.get(field)
+                if isinstance(value, str) and value:
+                    value, _ = _h.redact_exfiltration_urls(value)
+                    value, _ = _h.redact_credentials(value)
+                    row[field] = value
+            redacted_local.append(row)
+        sources.append(redacted_local)
+    for iid, result in zip(connected, results[1:]):
+        if isinstance(result, BaseException):
+            _audit("search_sessions", "failure", request_id=iid, error=type(result).__name__)
+            unreachable.append({"id": iid, "name": _name(iid), "code": "search_unreachable"})
+            continue
+        ok, payload = result
+        if not ok:
+            code = str(payload.get("code", "search_unreachable"))
+            # The code lands in the SEL audit trail too, so an operator can
+            # tell a stale credential from a dead tunnel per peer after the
+            # fact without reproducing the search.
+            _audit("search_sessions", "failure", request_id=iid, error=code)
+            unreachable.append({"id": iid, "name": _name(iid), "code": code})
+            continue
+        rows = payload.get("sessions")
+        cleaned = []
+        if isinstance(rows, list):
+            for row in rows[:limit]:
+                c = _clean(row, iid)
+                if c is not None:
+                    cleaned.append(c)
+        sources.append(cleaned)
+
+    merged: list[dict] = []
+    for rank in range(limit):
+        for source in sources:
+            if rank < len(source):
+                merged.append(source[rank])
+            if len(merged) >= limit:
+                break
+        if len(merged) >= limit:
+            break
+    _audit("search_sessions", "success", request_id=f"{len(connected)} peers")
+    return web.json_response({"sessions": merged, "unreachable": unreachable})
 
 
 async def api_instances_send_session(request: web.Request) -> web.Response:

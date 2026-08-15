@@ -34,6 +34,7 @@ mint, diagnostics, injection validation, run-marker) plus
 - [12. The gateway run-marker (`run_marker.py`)](#12-the-gateway-run-marker-run_markerpy)
 - [13. The SSM connection method (`connection_method`)](#13-the-ssm-connection-method-connection_method)
 - [14. Session transfer (send a session to another instance)](#14-session-transfer-send-a-session-to-another-instance)
+- [15. Federated session search (search every connected instance at once)](#15-federated-session-search-search-every-connected-instance-at-once)
 
 ---
 
@@ -1086,3 +1087,98 @@ other direction is therefore done by registering the peers you want on each host
 that should originate a transfer, and a hub-initiated **pull** (read a peer's
 session over the same forward) is the natural follow-on that would make
 remote → hub and remote → remote work without any reverse reachability.
+
+## 15. Federated session search (search every connected instance at once)
+
+`GET /api/instances/search-sessions` answers one query with sessions from the
+local gateway **and** every instance whose tunnel is currently `CONNECTED`. The
+dashboard's two search surfaces switch to it automatically whenever at least one
+warm connection exists (the ⌘K palette's Sessions tab and the sidebar's Older
+Sessions search); with no warm instance they keep calling the plain local
+`/api/sessions/search`, so a peerless install never pays the detour.
+
+### 15.1 It is the hub-initiated pull §14.6 anticipated
+
+The search reuses the transfer's transport shape exactly: the hub GETs a peer's
+own `/api/sessions/search` **over the already-open forward** — no SSH spawn, no
+new port, no reverse reachability. `SshTunnelManager.search_sessions_remote`
+follows `send_session_bundle`'s credential rules to the letter: **the token
+never leaves the manager** (§6's invariant holds — `connect` and `refresh-token`
+remain the only routes whose response carries one), it travels as the
+port-scoped cookie so it cannot land in the peer's access log, and a `401/403`
+gets exactly one transparent re-mint retry, because a retained credential can go
+stale while the tunnel stays `CONNECTED`.
+
+Each peer request runs under `DEFAULT_SEARCH_PROXY_TIMEOUT_SECS` (6s) — sized
+between the token probe (2s, a bare ping, which would produce false
+"unreachable" verdicts on a loaded peer doing real scan work) and the transfer
+budget (30s, which would let one dead tunnel stall a keystroke-driven search).
+Peers are fanned out concurrently, so the slowest peer bounds the whole reply.
+
+### 15.2 Merging without a cross-instance score
+
+The aggregator **rank-interleaves**: position *k* of the reply cycles through
+each source's *k*-th best hit, local source first. Raw scores are never compared
+across gateways — each instance may run a different ranking version (a newer hub
+searching an older peer, or vice versa), so a numeric merge would silently
+prefer whichever version inflates its scores. Interleaving needs no score wire
+format, keeps every source represented in the top rows, and preserves each
+source's own internal order.
+
+An unreachable or refusing peer never fails the request: it is reported in the
+reply's `unreachable` array as `{id, name, code}` so a caller can tell what was
+NOT searched instead of having the result set silently narrowed. The shipped
+dashboard surfaces log the report (a visible "N instances unreachable" affordance
+is a follow-up); only CONNECTED peers are fanned out, so a miss here is a rare
+mid-search transient rather than the steady state for a down instance.
+Machine-readable codes distinguish a stale credential (`search_unauthorized`)
+from a dead tunnel (`search_unreachable`), a peer error (`search_peer_refused`),
+and a garbled reply (`search_malformed_reply`); the same codes are recorded in
+the SEL audit event for the request, so an operator can audit which peer failed
+and why without reproducing the search.
+
+### 15.3 Peer replies are untrusted input
+
+A peer's rows are re-shaped through a strict allowlist before they reach the
+browser: only known fields are copied, strings are type-checked, and `title` /
+`snippet` are re-run through the local credential + exfiltration redaction — the
+peer claims to have redacted, but this hub does not take its word for it. Rows
+from a peer additionally carry `instance_id` + `instance_name`; local rows carry
+neither, so the reply shape for a hub with no peers degrades to exactly the
+local search's own.
+
+The endpoint runs behind the same `_guard()` as every §6 route (owner-only,
+never Slack, `instances.enabled`, SEL-audited as `instances_search_sessions`)
+and mirrors the local search's input contract (`q` sanitized, capped at 256
+chars, min `SEARCH_MIN_CHARS`; `limit` default 50, max 200). The local rows are
+also redacted here: the aggregator calls `conversation_log.search_sessions`
+directly rather than going through the `/api/sessions/search` handler where the
+local redaction normally lives.
+
+### 15.4 What the UI does with a remote row
+
+A remote row's transcript lives on the other gateway, so the local dashboard can
+neither resume nor delete it:
+
+- **Activation switches panes.** Both surfaces route through
+  `useSelectInstance` (the single owner of switch-to-a-pane semantics, §3), so
+  clicking a remote row activates that instance's embedded pane —
+  reconnecting it first if needed. Deep-linking to the specific session inside
+  the embedded SPA is a follow-up: the iframe protocol has no open-session
+  message yet.
+- **The local delete action is hidden** on remote rows. `deleteHistorySession`
+  targets the LOCAL session file; with colliding keys across gateways it would
+  delete a same-keyed, unrelated local conversation.
+- **⌘Enter (open in local split grid) is inert** for remote rows in the
+  palette — bound to an explicit no-op, because an absent handler makes the
+  palette's Enter dispatch fall back to plain activation and the chord would
+  silently switch panes.
+- Remote rows are badged with the instance's **raw name** (never translated —
+  it is the user's own label, which also keeps the change i18n-neutral), and
+  result ids are namespaced by instance so two gateways' same-keyed sessions
+  cannot collide in the palette's keyed list. Snippet-highlight offsets are
+  shifted by the prefix length so remote rows highlight the same match a local
+  row would.
+- Any federated-endpoint failure in the UI — including the `403` when the
+  instances feature is off — falls back to the plain local search, which is
+  always the floor.

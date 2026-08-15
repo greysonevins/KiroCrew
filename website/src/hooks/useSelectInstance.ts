@@ -22,11 +22,18 @@ import { useCallback } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { api, type InstanceView } from '../api/client'
 import { useAppDispatch, useAppSelector } from '../store'
-import { setWarm, setActiveId } from '../store/instancesSlice'
+import { setWarm, setActiveId, type WarmConn } from '../store/instancesSlice'
+
+/** Stable empty fallback for partial (test) stores — see the guarded read below. */
+const EMPTY_WARM: Record<string, WarmConn> = {}
 
 export function useSelectInstance(instances: InstanceView[]) {
   const dispatch = useAppDispatch()
-  const warm = useAppSelector(s => s.instances.warm)
+  // Guarded read with a STABLE fallback: this hook is now reached from
+  // ChatSidebar and the command palette, which many test harnesses render with
+  // partial stores lacking the instances slice; a fresh `{}` per call would
+  // make useSelector re-render every store change, so the fallback is shared.
+  const warm = useAppSelector(s => s.instances?.warm ?? EMPTY_WARM)
 
   const connectMutation = useMutation({
     mutationFn: (id: string) => api.connectInstance(id),

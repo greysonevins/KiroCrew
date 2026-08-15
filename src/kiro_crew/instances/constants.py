@@ -148,6 +148,25 @@ DEFAULT_TOKEN_PROBE_TIMEOUT_SECS: float = 2.0
 # surfaces as a clean transfer error instead of hanging the caller's turn.
 DEFAULT_SESSION_TRANSFER_TIMEOUT_SECS: float = 30.0
 
+# Timeout (secs) for one federated session-search request over an already-open
+# tunnel (GET the peer's /api/sessions/search — no SSH spawn). Sized between the
+# token probe (2s, a bare status ping) and the transfer (30s, a ~20 MB bundle):
+# a search reply is a small JSON page but the peer does real scanning work
+# (bounded by its own _SEARCH_SCAN_WINDOW), so the probe budget would produce
+# false "unreachable" verdicts on a loaded peer, while anything transfer-sized
+# would let one dead tunnel stall an interactive, keystroke-driven search. The
+# fan-out runs peers concurrently, so this is also the worst-case latency a
+# slow peer adds to the aggregated response.
+DEFAULT_SEARCH_PROXY_TIMEOUT_SECS: float = 6.0
+
+# Byte ceiling for one peer's federated-search reply, enforced BEFORE JSON
+# decoding (resp.json() buffers the whole body first, so a hostile/broken peer
+# streaming an unbounded reply could exhaust hub memory before any per-field
+# clamp runs). Sized generously above any honest reply: the aggregator caps
+# limit at 200 rows and every string field is clamped to 2 KiB downstream, so
+# a truthful worst case is well under 1 MiB; 4 MiB only ever bites on garbage.
+SEARCH_REPLY_MAX_BYTES: int = 4 * 1024 * 1024
+
 
 # Accepted shape for a dashboard-token lifetime: a positive integer of at most
 # four digits followed by ``h`` or ``m``. Canonical here because three layers

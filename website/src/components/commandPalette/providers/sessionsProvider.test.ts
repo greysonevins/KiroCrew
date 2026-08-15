@@ -257,3 +257,97 @@ describe('createSessionsProvider — folder-fetch failure is distinct from searc
     await expect(p.search('my')).rejects.toThrow('search down')
   })
 })
+
+describe('createSessionsProvider — federated (remote-instance) rows', () => {
+  // Remote rows come back from /api/instances/search-sessions tagged with
+  // instance_id/_name. Their contract differs from local rows in four ways,
+  // each guarding a real failure mode:
+  //  - id is namespaced by instance so two gateways' same-keyed sessions
+  //    cannot collide in the palette's keyed list;
+  //  - Enter routes through the instance switcher (ref.instanceId), never
+  //    resumeFromHistory, which would open a same-keyed UNRELATED local chat;
+  //  - ⌘Enter (local split grid) is unbound — the transcript lives elsewhere;
+  //  - snippet highlight offsets are omitted because the instance-name prefix
+  //    shifts them (wrong characters would be marked).
+  const remoteFixture = async (): Promise<SessionSearchResponse> => ({
+    sessions: [
+      { key: 'chat-1', title: 'deploy notes', agent: 'kirocrew' },
+      {
+        key: 'chat-1', // deliberately same key as the local row
+        title: 'deploy notes',
+        snippet: 'we planned the deploy here',
+        instance_id: 'inst-a',
+        instance_name: 'clouddeskARM',
+      },
+    ],
+  })
+
+  it('namespaces the remote row id by instance so same-keyed rows cannot collide', async () => {
+    const { d } = deps({ fetchSessions: vi.fn(remoteFixture) })
+    const results = await createSessionsProvider(d).search('deploy')
+    const ids = results.map(r => r.id)
+    expect(ids).toContain('sessions:chat-1')
+    expect(ids).toContain('sessions:inst-a:chat-1')
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('prefixes the remote subtitle with the instance name and SHIFTS snippet highlights by the prefix', async () => {
+    const { d } = deps({ fetchSessions: vi.fn(remoteFixture) })
+    const results = await createSessionsProvider(d).search('deploy')
+    const remote = results.find(r => r.id === 'sessions:inst-a:chat-1')!
+    expect(remote.subtitle).toBe('clouddeskARM · we planned the deploy here')
+    // Offsets were computed against the bare snippet; the prefix shifts the
+    // snippet within the subtitle, so the highlight indices shift with it and
+    // must land exactly on 'deploy' in the RENDERED string.
+    const idx = remote.subtitleIndices!
+    expect(idx.length).toBe('deploy'.length)
+    const highlighted = idx.map(i => remote.subtitle![i]).join('')
+    expect(highlighted).toBe('deploy')
+    expect(remote.subtitle!.slice(idx[0], idx[idx.length - 1] + 1)).toBe('deploy')
+    // The local sibling has no snippet — subtitle falls back to the agent name.
+    const local = results.find(r => r.id === 'sessions:chat-1')!
+    expect(local.subtitle).toBe('kirocrew')
+  })
+
+  it('falls back to instance_id in the subtitle when the instance name is absent', async () => {
+    const fetchSessions = vi.fn(
+      async (): Promise<SessionSearchResponse> => ({
+        sessions: [{ key: 'k', title: 'deploy', instance_id: 'inst-b' }],
+      }),
+    )
+    const { d } = deps({ fetchSessions })
+    const results = await createSessionsProvider(d).search('deploy')
+    expect(results[0].subtitle).toBe('inst-b')
+  })
+
+  it('Enter on a remote row passes instanceId to openSession; a local row passes none', async () => {
+    const { d, openSession } = deps({ fetchSessions: vi.fn(remoteFixture) })
+    const results = await createSessionsProvider(d).search('deploy')
+
+    results.find(r => r.id === 'sessions:inst-a:chat-1')!.onActivate?.()
+    expect(openSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ key: 'chat-1', instanceId: 'inst-a' }),
+    )
+
+    results.find(r => r.id === 'sessions:chat-1')!.onActivate?.()
+    expect(openSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ key: 'chat-1', instanceId: undefined }),
+    )
+  })
+
+  it('makes ⌘Enter inert on remote rows while keeping the split opener on local rows', async () => {
+    const { d, openSession, openInSplit } = deps({ fetchSessions: vi.fn(remoteFixture) })
+    const results = await createSessionsProvider(d).search('deploy')
+    // A bare `undefined` would make the palette's dispatchEnter fall back to
+    // onActivate (switching panes on ⌘Enter); the contract is an explicit
+    // no-op that triggers neither open path.
+    const remote = results.find(r => r.id === 'sessions:inst-a:chat-1')!
+    expect(remote.onCmdActivate).toBeDefined()
+    remote.onCmdActivate?.()
+    expect(openSession).not.toHaveBeenCalled()
+    expect(openInSplit).not.toHaveBeenCalled()
+    // Local rows keep the real split opener.
+    results.find(r => r.id === 'sessions:chat-1')!.onCmdActivate?.()
+    expect(openInSplit).toHaveBeenCalledWith(expect.objectContaining({ key: 'chat-1' }))
+  })
+})

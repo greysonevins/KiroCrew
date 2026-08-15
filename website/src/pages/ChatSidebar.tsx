@@ -34,6 +34,7 @@ import { useAvailableModels } from '../hooks/useAvailableModels'
 import { useListboxKeyboard } from '../hooks/useListboxKeyboard'
 import { useSessionPalette } from '../hooks/useSessionPalette'
 import { useMoveSlotToFolder } from '../hooks/useMoveSlotToFolder'
+import { useSelectInstance } from '../hooks/useSelectInstance'
 import { useSimplifiedToolNames } from '../hooks/useSimplifiedToolNames'
 import { useLanguage } from '../i18n/LanguageProvider'
 import { useSessionActions } from '../hooks/useSessionActions'
@@ -670,14 +671,39 @@ const SESSION_FILTERS: SessionFilterDef[] = [
  */
 function useDebouncedSessionSearch<T>(
   query: string,
-  transform: (sessions: { key: string; title?: string; created?: string; modified?: number; agent?: string; memory_mode?: 'persistent' | 'incognito' | 'temporary'; clean_mode?: boolean; folder_id?: string }[]) => T,
+  transform: (sessions: { key: string; title?: string; created?: string; modified?: number; agent?: string; memory_mode?: 'persistent' | 'incognito' | 'temporary'; clean_mode?: boolean; folder_id?: string; instance_id?: string; instance_name?: string }[]) => T,
   revalidateSignal?: string,
+  federated = false,
 ): T | null {
   const [result, setResult] = useState<T | null>(null)
   const token = useRef(0)
   const queryRef = useRef(query)
   queryRef.current = query
   const debounceActive = useRef(false)
+  // Read via ref so a connect/disconnect mid-debounce doesn't re-fire the
+  // keystroke effect; the NEXT search simply takes the new route.
+  const federatedRef = useRef(federated)
+  federatedRef.current = federated
+
+  // One fetch for both effects below: the federated endpoint merges the local
+  // gateway with every connected remote instance (rank-interleaved, remote rows
+  // tagged instance_id/_name); any failure — including the 403 when the
+  // instances feature is off — falls back to the plain local search, which is
+  // always the floor. Unreachable peers are logged, not surfaced: only
+  // CONNECTED peers are fanned out, so this is a rare transient, and the local
+  // results still render.
+  const fetchSessions = async (q: string) => {
+    if (!federatedRef.current) return api.sessionsSearch(q)
+    try {
+      const d = await api.instancesSearchSessions(q)
+      if (Array.isArray(d?.unreachable) && d.unreachable.length) {
+        console.warn('[sidebar] federated session search: unreachable instances', d.unreachable)
+      }
+      return d
+    } catch {
+      return api.sessionsSearch(q)
+    }
+  }
 
   // Debounced: fires 250ms after the last query keystroke.
   useEffect(() => {
@@ -688,7 +714,7 @@ function useDebouncedSessionSearch<T>(
     let cancelled = false
     const t = setTimeout(async () => {
       try {
-        const d = await api.sessionsSearch(q)
+        const d = await fetchSessions(q)
         if (cancelled || myToken !== token.current) return
         setResult(transform(d.sessions || []))
       } catch { /* keep previous result on error */ }
@@ -716,7 +742,7 @@ function useDebouncedSessionSearch<T>(
       if (debounceActive.current) return
       const myToken = ++token.current
       try {
-        const d = await api.sessionsSearch(q)
+        const d = await fetchSessions(q)
         if (cancelled || myToken !== token.current) return
         setResult(transform(d.sessions || []))
       } catch { /* keep previous result on error */ }
@@ -893,7 +919,27 @@ function ChatSidebar({
   )
   // The Older Sessions pane renders `history`, so this slots-derived signal is a
   // proxy: it moves for every rename reachable today, all of which start on a live row.
-  const historySearchResults = useDebouncedSessionSearch(historyFilter, s => s, slotTitleDigest)
+  // Federated when any remote instance holds a live connection: the endpoint
+  // then also covers every connected instance's sessions (rows tagged with
+  // instance_id/_name render a badge and activate that instance's pane).
+  // Guarded read: ChatSidebar is rendered by dozens of test harnesses whose
+  // partial stores omit the instances slice entirely (unlike the instances-own
+  // components, which only ever mount with it).
+  const hasWarmInstances = useAppSelector(s => Object.keys(s.instances?.warm ?? {}).length > 0)
+  const historySearchResults = useDebouncedSessionSearch(
+    historyFilter, s => s, slotTitleDigest, hasWarmInstances,
+  )
+  // Shared ['instances'] cache + shared select-and-maybe-reconnect semantics for
+  // activating a remote row; enabled only while a warm connection exists so a
+  // peerless install never issues the query.
+  const instancesQuery = useQuery({
+    queryKey: ['instances'],
+    queryFn: () => api.listInstances(),
+    enabled: hasWarmInstances,
+  })
+  const instancesData = instancesQuery.data?.instances
+  const instancesList = useMemo(() => instancesData ?? [], [instancesData])
+  const { selectInstance } = useSelectInstance(instancesList)
   // Which folder groups are collapsed in the grouped search-results view.
   // Ephemeral: reset on every query change so a fresh search shows all groups.
   const [collapsedHistoryGroups, setCollapsedHistoryGroups] = useState<Set<string>>(() => new Set())
@@ -4368,6 +4414,17 @@ function ChatSidebar({
                   const surfaceLabel = isDashboard
                     ? i18nT('pages.chatSidebar.dashboard_source')
                     : slotChannelLabel(s.key) || i18nT('pages.chatSidebar.session_source')
+                  // Federated-search row from a connected remote instance: its
+                  // transcript lives on the other gateway, so activation switches
+                  // to that instance's pane instead of resuming a (same-keyed but
+                  // unrelated) local session, and the local delete action is
+                  // hidden — deleteHistorySession would target the LOCAL file.
+                  const remoteInstanceId = (s as { instance_id?: string }).instance_id
+                  const remoteInstanceName = (s as { instance_name?: string }).instance_name
+                  const activateRow = () => {
+                    if (remoteInstanceId) { selectInstance(remoteInstanceId); return }
+                    dispatch(resumeFromHistory({ key: s.key, title: s.title || s.key }))
+                  }
                   return (
                     <div className={`group relative flex items-start gap-2.5 pr-4 py-2 rounded-md text-sm transition-all select-none ${!connected ? 'text-muted opacity-50 cursor-not-allowed' : 'text-muted hover:text-text hover:bg-bg-hover cursor-pointer'}`} style={{ paddingLeft: '10px' }} title={s.title || s.key} {...offlineProps(connected, 'resume sessions')} role="button" tabIndex={0} aria-disabled={!connected} onKeyDown={e => {
                       // WCAG 2.1.1: history rows must be resumable via keyboard.
@@ -4375,7 +4432,7 @@ function ChatSidebar({
                       if ((e.target as HTMLElement) !== e.currentTarget) return
                       e.preventDefault()
                       if (!connected) return
-                      dispatch(resumeFromHistory({ key: s.key, title: s.title || s.key }))
+                      activateRow()
                     }} onMouseDown={e => {
                       // NOTE: pointer activation lives on onMouseDown (not onClick). For a
                       // div[role="button"], browsers do NOT synthesize a click from Enter
@@ -4386,9 +4443,9 @@ function ChatSidebar({
                       // future onClick: AT-synthesized clicks have detail 0 and would be
                       // silently dropped, breaking screen-reader activation.
                       e.preventDefault()
-                      if ((e.target as HTMLElement).closest?.('[data-close]')) { if (confirm(i18nT('pages.chatSidebar.are_you_sure_you_want_to_delete_this_history_ses'))) dispatch(deleteHistorySession(s.key)); return }
+                      if ((e.target as HTMLElement).closest?.('[data-close]')) { if (!remoteInstanceId && confirm(i18nT('pages.chatSidebar.are_you_sure_you_want_to_delete_this_history_ses'))) dispatch(deleteHistorySession(s.key)); return }
                       if (!connected) return
-                      dispatch(resumeFromHistory({ key: s.key, title: s.title || s.key }))
+                      activateRow()
                     }}>
                       {/* Platform glyph — fills the left column that session rows reserve for the unread dot */}
                       <span role="img" className="shrink-0 flex items-center justify-center self-center text-muted" title={surfaceLabel} aria-label={surfaceLabel}>
@@ -4402,6 +4459,7 @@ function ChatSidebar({
                       <div className="flex-1 min-w-0 overflow-hidden">
                         <div className={`session-agent-label text-[11px] font-semibold truncate leading-tight flex items-center gap-1 ${agentColor}`}>
                           <span className="truncate">{agentName || '\u00A0'}</span>
+                          {remoteInstanceName && <span className="shrink-0 text-[10px] px-1 rounded bg-bg-muted text-muted border border-border" title={remoteInstanceName}>{remoteInstanceName}</span>}
                           {s.clean_mode
                             ? <span className="text-accent" title={i18nT('pages.chatSidebar.clean_agent_only_no_kirocrew_context_or_mcp')}><Droplet size={10} /></span>
                             : <>
@@ -4412,10 +4470,13 @@ function ChatSidebar({
                         </div>
                         <div className="text-[13px] leading-snug line-clamp-2 break-words">{s.title || s.key}</div>
                       </div>
-                      {/* Floating hover button group — matches session-row pattern */}
-                      <div className="absolute top-1/2 -translate-y-1/2 right-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-all flex items-center gap-0.5 rounded-md p-1 bg-card border border-border shadow-sm">
+                      {/* Floating hover button group — matches session-row pattern.
+                          Hidden for remote rows: deleteHistorySession targets the
+                          LOCAL session file, which for a remote row is at best a
+                          same-keyed unrelated conversation. */}
+                      {!remoteInstanceId && <div className="absolute top-1/2 -translate-y-1/2 right-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-all flex items-center gap-0.5 rounded-md p-1 bg-card border border-border shadow-sm">
                         <button type="button" title={i18nT('pages.chatSidebar.delete_history_session')} aria-label={i18nT('pages.chatSidebar.delete_history_session')} className="text-[12px] text-muted cursor-pointer p-[4px] rounded hover:text-danger hover:bg-danger-subtle transition-all bg-transparent border-none" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); if (confirm(i18nT('pages.chatSidebar.are_you_sure_you_want_to_delete_this_history_ses'))) dispatch(deleteHistorySession(s.key)) }}><X size={12} /></button>
-                      </div>
+                      </div>}
                     </div>
                   )
                 }
