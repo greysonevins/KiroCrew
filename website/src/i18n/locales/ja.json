@@ -9941,6 +9941,9 @@
         "session_folder_name_desc": "この設定を保存したときに、まだ存在しなければ作成されます。"
       },
       "browserPanel": {
+        "use_builtin_label": "内蔵ブラウザーを使用する",
+        "use_builtin_desc": "Kiro Crew の内蔵パネルでページを開きます。オフにすると playwright-cli で閲覧します。",
+        "use_builtin_desktop_only": "デスクトップアプリでのみ動作します。ブラウザーやリモートゲートウェイでは、エージェントは playwright-cli を使用します。",
         "browsing": "ブラウジング",
         "cannot_load": "ブラウザーの状態を読み込めません。ゲートウェイは起動していますか？",
         "available": "エージェントはウェブページを閲覧できます。",

@@ -29,6 +29,9 @@ def _browsing_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod.mcp_core, "_session_key_header_error", lambda sk: None)
     # Default: governance permits browsing (its own deny is covered separately).
     monkeypatch.setattr(mod.mcp_core, "_vet_browse_governance", lambda s: None)
+    # Default: the built-in-browser preference is ON (its OFF path is covered
+    # separately); otherwise every test would route to the playwright fallback.
+    monkeypatch.setattr(mod, "_use_builtin_browser", lambda: True)
 
 
 def _capture_post(recorder: list[tuple[str, str, dict, str, int]], status: int, payload: dict):
@@ -161,6 +164,44 @@ def test_governance_deny_refuses_without_fallback_or_posting(
     out = mod.browser("browser", {"op": "navigate", "args": {"url": "https://example.com"}})
     assert out.startswith("Error: web browsing is disabled by governance policy")
     assert out != mod._FALLBACK_TEXT  # not the playwright downgrade
+
+
+def test_builtin_off_falls_back_to_playwright_without_posting(monkeypatch: pytest.MonkeyPatch) -> None:
+    # With the built-in-browser preference OFF, browsing is still allowed (unlike
+    # a governance deny) -- the tool returns the dedicated built-in-off message
+    # (naming the setting, not a missing panel) and never touches the native panel.
+    monkeypatch.setattr(mod.mcp_core, "_resolve_session_key", lambda: "dashboard:chat-7-1")
+    monkeypatch.setattr(mod, "_use_builtin_browser", lambda: False)
+
+    def _must_not_post(*_a: Any, **_k: Any) -> tuple[int, dict]:
+        raise AssertionError("must not POST when the built-in browser is off")
+
+    monkeypatch.setattr(mod, "_post_command", _must_not_post)
+
+    out = mod.browser("browser", {"op": "navigate", "args": {"url": "https://example.com"}})
+    assert out == mod._DISABLED_TEXT
+    assert "turned off in Settings" in out
+
+
+def test_governance_deny_wins_over_builtin_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Pins the ordering invariant: a governance DENY must win even when the
+    # built-in-browser preference is OFF. If the OFF short-circuit ever moved
+    # ahead of the governance gate, a denied session would get _FALLBACK_TEXT and
+    # keep browsing via playwright -- exactly the control the ordering protects.
+    monkeypatch.setattr(mod.mcp_core, "_resolve_session_key", lambda: "dashboard:chat-7-1")
+    monkeypatch.setattr(
+        mod.mcp_core, "_vet_browse_governance", lambda s: "web browsing is disabled by governance policy"
+    )
+    monkeypatch.setattr(mod, "_use_builtin_browser", lambda: False)
+
+    def _deny_post(*_a: Any, **_k: Any) -> tuple[int, dict]:
+        raise AssertionError("must not POST when browsing is governance-denied")
+
+    monkeypatch.setattr(mod, "_post_command", _deny_post)
+
+    out = mod.browser("browser", {"op": "navigate", "args": {"url": "https://example.com"}})
+    assert out.startswith("Error: web browsing is disabled by governance policy")
+    assert out != mod._FALLBACK_TEXT
 
 
 def test_navigate_classifier_rejects_parser_differential_hosts() -> None:

@@ -98,6 +98,7 @@ export interface DashboardConfig {
   restore_window_minutes: number
   merge_queued_messages: boolean
   widget_density: 'more' | 'less'
+  use_builtin_browser: boolean
   verbosity: 'default' | 'concise' | 'ultra'
   quick_send: boolean
   session_grid: boolean

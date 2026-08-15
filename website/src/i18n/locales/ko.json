@@ -9941,6 +9941,9 @@
         "session_folder_name_desc": "이 설정을 저장할 때 폴더가 아직 없으면 새로 만들어집니다."
       },
       "browserPanel": {
+        "use_builtin_label": "내장 브라우저 사용",
+        "use_builtin_desc": "Kiro Crew의 내장 패널에서 페이지를 엽니다. 끄면 playwright-cli로 탐색합니다.",
+        "use_builtin_desktop_only": "데스크톱 앱에서만 작동합니다. 브라우저나 원격 게이트웨이에서는 에이전트가 playwright-cli를 사용합니다.",
         "browsing": "브라우징",
         "cannot_load": "브라우저 상태를 불러올 수 없습니다. 게이트웨이가 실행 중인가요?",
         "available": "에이전트가 웹 페이지를 탐색할 수 있습니다.",

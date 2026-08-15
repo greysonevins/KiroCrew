@@ -2576,7 +2576,7 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                 session_key="dashboard", tool_name="dashboard_config_write", outcome="failure"
             )
             return web.json_response({"error": "request body must be a JSON object"}, status=400)
-        _allowed = {"restore_sessions", "restore_window_minutes", "merge_queued_messages", "widget_density", "verbosity", "quick_send", "session_grid", "tail_fork_enabled", "link_previews", "mcp_app_panel", "auto_open_git_panel", "folder_suggestions_enabled"}
+        _allowed = {"restore_sessions", "restore_window_minutes", "merge_queued_messages", "widget_density", "use_builtin_browser", "verbosity", "quick_send", "session_grid", "tail_fork_enabled", "link_previews", "mcp_app_panel", "auto_open_git_panel", "folder_suggestions_enabled"}
         # One-release backward-compat shim for removed key; delete after all clients update.
         deprecated_ignored_keys = {"tail_fork_head_handling"}
         # Read-only keys the GET exposes: both settings surfaces save with
@@ -2596,6 +2596,7 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                 session_key="dashboard", tool_name="dashboard_config_write", outcome="failure"
             )
             return web.json_response({"error": f"Unknown fields: {unknown}"}, status=400)
+        updates: dict[str, object] = {}
         if "restore_sessions" in body:
             val = body["restore_sessions"]
             if not isinstance(val, bool):
@@ -2605,10 +2606,10 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                 return web.json_response(
                     {"error": "restore_sessions must be a boolean"}, status=400
                 )
-            cfg.dashboard.restore_sessions = val
+            updates["restore_sessions"] = val
         try:
             if "restore_window_minutes" in body:
-                cfg.dashboard.restore_window_minutes = max(
+                updates["restore_window_minutes"] = max(
                     0, min(1440, int(body["restore_window_minutes"]))
                 )
         except (TypeError, ValueError):
@@ -2627,7 +2628,7 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                 return web.json_response(
                     {"error": "merge_queued_messages must be a boolean"}, status=400
                 )
-            cfg.dashboard.merge_queued_messages = val
+            updates["merge_queued_messages"] = val
         if "widget_density" in body:
             val = body["widget_density"]
             if val not in ("more", "less"):
@@ -2637,7 +2638,26 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                 return web.json_response(
                     {"error": "widget_density must be 'more' or 'less'"}, status=400
                 )
-            cfg.dashboard.widget_density = val
+            updates["widget_density"] = val
+        # Apply ONLY when it is the sole submitted setting. The Browser panel
+        # sends it alone; the Chat settings panel PUTs the whole config object
+        # from its own (possibly stale) cache, and applying it on that path would
+        # let a Chat-panel save silently revert a toggle another client changed
+        # (lost update).
+        if body.keys() == {"use_builtin_browser"}:
+            val = body["use_builtin_browser"]
+            if not isinstance(val, bool):
+                _sel().log_tool_invocation(
+                    session_key="dashboard", tool_name="dashboard_config_write", outcome="failure"
+                )
+                return web.json_response(
+                    {
+                        "error": "use_builtin_browser must be a boolean",
+                        "code": "invalid_use_builtin_browser",
+                    },
+                    status=400,
+                )
+            updates["use_builtin_browser"] = val
         if "verbosity" in body:
             val = body["verbosity"]
             if val not in ("default", "concise", "ultra"):
@@ -2647,7 +2667,7 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                 return web.json_response(
                     {"error": "verbosity must be 'default', 'concise' or 'ultra'"}, status=400
                 )
-            cfg.dashboard.verbosity = val
+            updates["verbosity"] = val
         if "tail_fork_enabled" in body:
             val = body["tail_fork_enabled"]
             if not isinstance(val, bool):
@@ -2657,7 +2677,7 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                 return web.json_response(
                     {"error": "tail_fork_enabled must be a boolean"}, status=400
                 )
-            cfg.dashboard.tail_fork_enabled = val
+            updates["tail_fork_enabled"] = val
         if "folder_suggestions_enabled" in body:
             val = body["folder_suggestions_enabled"]
             if not isinstance(val, bool):
@@ -2671,7 +2691,7 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                     },
                     status=400,
                 )
-            cfg.dashboard.folder_suggestions_enabled = val
+            updates["folder_suggestions_enabled"] = val
         if "link_previews" in body:
             val = body["link_previews"]
             if not isinstance(val, bool):
@@ -2685,7 +2705,7 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                     },
                     status=400,
                 )
-            cfg.dashboard.link_previews = val
+            updates["link_previews"] = val
         if "quick_send" in body:
             val = body["quick_send"]
             if not isinstance(val, bool):
@@ -2695,7 +2715,7 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                 return web.json_response(
                     {"error": "quick_send must be a boolean"}, status=400
                 )
-            cfg.dashboard.quick_send = val
+            updates["quick_send"] = val
         if "session_grid" in body:
             val = body["session_grid"]
             if not isinstance(val, bool):
@@ -2705,7 +2725,7 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                 return web.json_response(
                     {"error": "session_grid must be a boolean"}, status=400
                 )
-            cfg.dashboard.session_grid = val
+            updates["session_grid"] = val
         if "mcp_app_panel" in body:
             val = body["mcp_app_panel"]
             if not isinstance(val, bool):
@@ -2719,7 +2739,7 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                     },
                     status=400,
                 )
-            cfg.dashboard.mcp_app_panel = val
+            updates["mcp_app_panel"] = val
         if "auto_open_git_panel" in body:
             val = body["auto_open_git_panel"]
             if not isinstance(val, bool):
@@ -2733,8 +2753,74 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
                     },
                     status=400,
                 )
-            cfg.dashboard.auto_open_git_panel = val
-        cfg.save()
+            updates["auto_open_git_panel"] = val
+        # Serialize the read-modify-write under BOTH config locks so no concurrent
+        # writer -- in-process OR another process -- can clobber it:
+        #  * update_config_locked holds the cross-process advisory file lock
+        #    (<config>.lock) for the whole read-modify-write, so a concurrent
+        #    `kirocrew config set` (which takes that same file lock) cannot land
+        #    between our read and write and be silently discarded.
+        #  * wrapping it in _get_config_lock() (the repo-wide, loop-bound asyncio
+        #    lock) serializes it against the legacy in-process writers that still
+        #    save under that asyncio lock alone.
+        # Both run OFF-THREAD so the event loop is never blocked. Only the
+        # dashboard.<field> keys this request validated are written, leaving every
+        # other config section on disk untouched. GET stays lock-free.
+        from kiro_crew.config.loader import update_config_locked  # noqa: F811
+        from kiro_crew.dashboard.handlers.agents import (  # lazy: import cycle
+            _get_config_lock,
+        )
+
+        def _apply_dashboard_updates(data: dict) -> dict:
+            # `dashboard` is normally a dict; tolerate a missing or malformed
+            # (non-dict, e.g. a hand-edited/corrupt `[]`) section by replacing it
+            # with a fresh dict rather than raising TypeError mid-write. The prior
+            # non-dict value carried no valid dashboard settings, so this recovers
+            # the section instead of losing data, and leaves other config keys
+            # untouched.
+            section = data.get("dashboard")
+            if not isinstance(section, dict):
+                section = data["dashboard"] = {}
+            for _field, _value in updates.items():
+                section[_field] = _value
+            return data
+
+        try:
+            async with _get_config_lock():
+                await asyncio.to_thread(
+                    lambda: update_config_locked(mutate=_apply_dashboard_updates)
+                )
+        except asyncio.CancelledError:
+            # Cancellation (client disconnect / gateway shutdown) during the
+            # off-thread write does NOT hit the `except Exception` below
+            # (CancelledError is a BaseException), and the worker may still land
+            # the write -- so the authorized attempt would vanish from the SEL
+            # chain. Log a failure outcome, then re-raise so cancellation still
+            # propagates. Mirrors the load guard above; both satisfy the
+            # backend-security-controls audit contract.
+            _sel().log_tool_invocation(
+                session_key="dashboard",
+                tool_name="dashboard_config_write",
+                outcome="failure",
+                error="request_cancelled",
+            )
+            raise
+        except Exception:
+            # Any other failure to land the write -- e.g. a corrupt on-disk config
+            # makes update_config_locked's fail-closed read raise ConfigReadError
+            # (not an OSError, so nothing else catches it) -- must still leave a
+            # tamper-evident SEL entry rather than escaping as an unlogged 500.
+            _sel().log_tool_invocation(
+                session_key="dashboard", tool_name="dashboard_config_write", outcome="failure"
+            )
+            logger.exception("dashboard config write failed")
+            return web.json_response(
+                {
+                    "error": "failed to save dashboard config",
+                    "code": "dashboard_config_write_failed",
+                },
+                status=500,
+            )
         _sel().log_tool_invocation(
             session_key="dashboard", tool_name="dashboard_config_write", outcome="success"
         )
@@ -2748,6 +2834,7 @@ async def api_dashboard_config(request: web.Request) -> web.Response:
             "restore_window_minutes": cfg.dashboard.restore_window_minutes,
             "merge_queued_messages": cfg.dashboard.merge_queued_messages,
             "widget_density": cfg.dashboard.widget_density,
+            "use_builtin_browser": cfg.dashboard.use_builtin_browser,
             "verbosity": cfg.dashboard.verbosity,
             "quick_send": cfg.dashboard.quick_send,
             "session_grid": cfg.dashboard.session_grid,

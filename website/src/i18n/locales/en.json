@@ -6735,6 +6735,9 @@
       },
       "browserPanel": {
         "browsing": "Browsing",
+        "use_builtin_label": "Use the built-in browser",
+        "use_builtin_desc": "Open pages in Kiro Crew's built-in panel. Turn off to browse with playwright-cli instead.",
+        "use_builtin_desktop_only": "Only works in the desktop app. In a browser or on a remote gateway the agent uses playwright-cli.",
         "cannot_load": "Cannot load browser status. Is the gateway running?",
         "available": "The agent can browse web pages.",
         "presence_is_consent": "Browsing is available because the Playwright CLI is installed. Removing it is what takes the capability away.",

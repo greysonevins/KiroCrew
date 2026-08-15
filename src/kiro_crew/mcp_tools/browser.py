@@ -39,6 +39,7 @@ from urllib.parse import urlsplit
 
 from kiro_crew import mcp_core
 from kiro_crew.browser_cli import install
+from kiro_crew.config.loader import KiroCrewConfig
 from kiro_crew.security import canonicalize_ip, redact_credentials, redact_exfiltration_urls
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,16 @@ _FALLBACK_TEXT = (
     "plain-browser dashboard with no Electron panel). Use the playwright-cli "
     "browser verbs directly instead -- e.g. `playwright-cli open <url>`, "
     "`snapshot`, `click <ref>`, `screenshot`."
+)
+
+# Distinct from _FALLBACK_TEXT: the built-in panel is available but the user
+# deliberately turned it OFF in Settings -> Browser. Naming the real cause (the
+# setting, not a missing panel) keeps the agent from relaying a false "no native
+# panel" diagnosis and steering the user toward gateway/Electron debugging.
+_DISABLED_TEXT = (
+    "The built-in browser is turned off in Settings -> Browser, so browsing uses "
+    "playwright-cli. Use the playwright-cli browser verbs directly -- e.g. "
+    "`playwright-cli open <url>`, `snapshot`, `click <ref>`, `screenshot`."
 )
 
 # Per-op ceilings (ms) forwarded to the bus. A page load or an explicit
@@ -284,6 +295,21 @@ def _result_text(op: str, result: Any) -> str:
     return f"Browser {op}: {rendered[:2000]}"
 
 
+def _use_builtin_browser() -> bool:
+    """User preference (``dashboard.use_builtin_browser``): drive the built-in
+    native panel (True) or always fall back to playwright-cli (False).
+
+    Read fresh each call so a Settings toggle takes effect without restarting
+    the shim, and fail-OPEN to True: a config read/parse error must not silently
+    disable the panel. Cheap disk stat+parse, on the same defensive footing as
+    ``_browsing_available``.
+    """
+    try:
+        return bool(getattr(KiroCrewConfig.load().dashboard, "use_builtin_browser", True))
+    except Exception:
+        return True
+
+
 def browser(name: str, args: dict[str, Any]) -> str:
     # Re-checked here as well as in ``schemas()``: kiro-cli caches the tool list
     # for a session's life, so a session that started with the CLI installed
@@ -301,6 +327,16 @@ def browser(name: str, args: dict[str, Any]) -> str:
     gov_denied = mcp_core._vet_browse_governance(mcp_core._resolve_session_key())
     if gov_denied:
         return f"Error: {gov_denied}"
+    # User preference: built-in panel turned OFF in Settings -> Browser. Browsing
+    # is allowed (unlike the governance deny above) -- the user just wants the
+    # playwright-cli path, so return the fallback guidance and never touch the
+    # native panel. (When ON, the no-native-panel case below still degrades to
+    # playwright too -- e.g. a remote gateway with no Electron.)
+    if not _use_builtin_browser():
+        logger.debug(
+            "browser-cmdbus/tool: built-in browser disabled by setting -> playwright-cli fallback"
+        )
+        return _DISABLED_TEXT
     op = args.get("op")
     if not isinstance(op, str) or op not in BROWSER_OPS:
         return f"Error: op must be one of: {', '.join(BROWSER_OPS)}"

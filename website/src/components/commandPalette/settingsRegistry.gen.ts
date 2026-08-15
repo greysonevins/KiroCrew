@@ -6,6 +6,15 @@ import type { SettingEntry } from './settingsTypes'
 export const SETTINGS_REGISTRY: SettingEntry[] = 
 [
   {
+    "id": "browser.use-the-built-in-browser",
+    "label": "Use the built-in browser",
+    "labelKey": "pages.settings.browserPanel.use_builtin_label",
+    "tab": "browser",
+    "type": "toggle",
+    "occurrence": 1,
+    "configKey": "dashboard.use_builtin_browser"
+  },
+  {
     "id": "channels.file-sessions-in-a-folder",
     "label": "File sessions in a folder",
     "labelKey": "pages.settings.botChannelPanel.file_sessions_in_folder",

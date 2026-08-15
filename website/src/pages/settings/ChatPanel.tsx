@@ -105,7 +105,7 @@ export function ChatPanel() {
     queryKey: ['dashboardConfig'],
     queryFn: () => api.dashboardConfig(),
   })
-  const dashCfg = dashQ.data ?? { restore_sessions: false, restore_window_minutes: 30, merge_queued_messages: false, widget_density: 'more' as const, verbosity: 'default' as const, quick_send: false, session_grid: false, tail_fork_enabled: false, link_previews: false, mcp_app_panel: false, auto_open_git_panel: false, folder_suggestions_enabled: true }
+  const dashCfg = dashQ.data ?? { restore_sessions: false, restore_window_minutes: 30, merge_queued_messages: false, widget_density: 'more' as const, verbosity: 'default' as const, quick_send: false, session_grid: false, tail_fork_enabled: false, link_previews: false, mcp_app_panel: false, auto_open_git_panel: false, folder_suggestions_enabled: true, use_builtin_browser: true }
 
   // ── Feature Tips opt-out (server-side per-user state) ──
   const tipsQ = useQuery<{ enabled_config: boolean; opted_out: boolean }>({

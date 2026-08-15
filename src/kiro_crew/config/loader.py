@@ -2591,6 +2591,14 @@ class DashboardConfig:
             enum=["more", "less"],
         ),
     )
+    use_builtin_browser: bool = field(
+        default=True,
+        metadata=_meta(
+            "Use Built-in Browser",
+            "When on, the browser tool opens pages in Kiro Crew's built-in panel "
+            "(desktop app only). When off, the agent browses via playwright-cli.",
+        ),
+    )
     verbosity: str = field(
         default="default",
         metadata=_meta(
@@ -6341,6 +6349,7 @@ class KiroCrewConfig:
                 mcp_app_panel=dashboard_data.get("mcp_app_panel", False),
                 auto_open_git_panel=_safe_bool(dashboard_data.get("auto_open_git_panel"), False),
                 widget_density=dashboard_data.get("widget_density", "more"),
+                use_builtin_browser=_safe_bool(dashboard_data.get("use_builtin_browser"), True),
                 verbosity=dashboard_data.get("verbosity", "default"),
                 link_previews=_safe_bool(dashboard_data.get("link_previews"), False),
                 usage_text_scrape_enabled=_safe_bool(

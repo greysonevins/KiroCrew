@@ -9941,6 +9941,9 @@
         "session_folder_name_desc": "保存这些设置时若不存在会自动创建。"
       },
       "browserPanel": {
+        "use_builtin_label": "使用内置浏览器",
+        "use_builtin_desc": "在 Kiro Crew 的内置面板中打开页面。关闭后改用 playwright-cli 浏览。",
+        "use_builtin_desktop_only": "仅在桌面应用中可用。在浏览器或远程网关中，助手会使用 playwright-cli。",
         "browsing": "网页浏览",
         "cannot_load": "无法加载浏览器状态。网关在运行吗？",
         "available": "助手可以浏览网页。",

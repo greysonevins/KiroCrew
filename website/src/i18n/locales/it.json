@@ -10183,6 +10183,9 @@
         "session_folder_name_desc": "Viene creata quando salvi queste impostazioni, se non esiste ancora."
       },
       "browserPanel": {
+        "use_builtin_label": "Usa il browser integrato",
+        "use_builtin_desc": "Apre le pagine nel pannello integrato di Kiro Crew. Disattiva per navigare con playwright-cli.",
+        "use_builtin_desktop_only": "Funziona solo nell'app desktop. In un browser o su un gateway remoto l'agente usa playwright-cli.",
         "browsing": "Navigazione",
         "cannot_load": "Impossibile caricare lo stato del browser. Il gateway è in esecuzione?",
         "available": "L'agente può navigare le pagine web.",
