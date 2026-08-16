@@ -607,6 +607,10 @@ class AcpRuntime:
             str(mcp_gateway_settings_mcp_json) if mcp_gateway_settings_mcp_json else None
         )
         self._mcp_gateway_socket = str(mcp_gateway_socket) if mcp_gateway_socket else None
+        # First KAS auth callback per runtime is logged at INFO as a positive
+        # "KAS is actively serving this runtime" signal; later ones drop to
+        # DEBUG so a long-lived runtime does not spam the log on every refresh.
+        self._kas_auth_logged = False
         # Whether sessions on this runtime should hold drain_init() open for
         # slow MCP servers (the no-report ceiling). A runtime whose agent is
         # KNOWN to have zero MCP servers — the kirocrew-lite background runtime,
@@ -974,7 +978,12 @@ class AcpRuntime:
         self._start_time = _get_start_time(self._pid)
         self._spawn_monotonic = time.monotonic()
         self._last_activity = time.monotonic()
-        logger.info("AcpRuntime spawned kiro-cli acp (PID %d)", self._pid)
+        logger.info(
+            "AcpRuntime spawned backend=%s agent=%s (PID %d)",
+            self._acp_backend,
+            self._agent or "<none>",
+            self._pid,
+        )
 
         # Track the PID for orphan cleanup (mirrors AcpClient._spawn). Without
         # this, a kiro-cli process leaked by a gateway crash/restart is never
@@ -1576,6 +1585,23 @@ class AcpRuntime:
         positive ``== ACP_BACKEND_KAS`` check (harness-parity H5); this body is
         only ever reached on the KAS path.
         """
+        # Positive liveness signal: this callback fires ONLY when a running
+        # KAS process asks Kiro Crew for a token, so reaching here is direct
+        # proof KAS is serving this runtime. No token is logged — only the
+        # fact of the callback, deduped to once-per-runtime at INFO.
+        if not self._kas_auth_logged:
+            self._kas_auth_logged = True
+            logger.info(
+                "KAS auth callback served — backend=kas agent=%s (PID %s)",
+                self._agent or "<none>",
+                self._pid,
+            )
+        else:
+            logger.debug(
+                "KAS auth callback served — agent=%s (PID %s)",
+                self._agent or "<none>",
+                self._pid,
+            )
         try:
             result = await resolve_kas_access_token()
         except KasAuthCallbackError as exc:

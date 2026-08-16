@@ -19,7 +19,12 @@ from __future__ import annotations
 
 import pytest
 
-from kiro_crew.acp._dispatch import extract_tool_purpose, is_tool_purpose_key, parse_session_update
+from kiro_crew.acp._dispatch import (
+    extract_tool_purpose,
+    is_tool_purpose_key,
+    parse_session_update,
+    select_tool_title,
+)
 from kiro_crew.acp.types import EVENT_TOOL_CALL_UPDATE, TOOL_PURPOSE_KEYS
 
 
@@ -180,3 +185,34 @@ def test_refinement_purpose_is_redacted() -> None:
     assert event.tool_purpose.startswith("Use ")
     assert event.tool_purpose.endswith("to list buckets")
     assert "AKIAIOSFODNN7EXAMPLE" not in event.tool_purpose
+
+
+class TestSelectToolTitle:
+    """The pill label falls back sensibly when a backend omits the SDK title."""
+
+    def test_description_is_preferred(self) -> None:
+        raw = {"description": "List temp", "command": "ls /tmp"}
+        assert select_tool_title("ls /tmp", raw) == "List temp"
+
+    def test_title_preferred_over_command(self) -> None:
+        assert select_tool_title("ls /tmp", {"command": "ls /tmp"}, "execute") == "ls /tmp"
+
+    def test_unknown_sentinel_falls_through_to_command_for_shell(self) -> None:
+        # A backend that omits the title leaves the flat field at the "unknown"
+        # sentinel; a shell call still shows its command instead of a bare kind.
+        assert select_tool_title("unknown", {"command": "git status"}, "execute") == "git status"
+
+    def test_none_title_falls_through_to_command_for_shell(self) -> None:
+        assert select_tool_title(None, {"command": "git status"}, "execute") == "git status"
+
+    def test_command_not_used_for_non_shell_kind(self) -> None:
+        # For an fs edit tool, rawInput.command is the operation name
+        # ("strReplace"), not a shell command — it must not become the label.
+        assert select_tool_title("unknown", {"command": "strReplace"}, "edit") is None
+
+    def test_command_ignored_without_kind(self) -> None:
+        # Without a kind we cannot confirm a shell tool, so no command fallback.
+        assert select_tool_title("unknown", {"command": "ls"}) is None
+
+    def test_blank_title_no_command_returns_none(self) -> None:
+        assert select_tool_title("", {}, "execute") is None

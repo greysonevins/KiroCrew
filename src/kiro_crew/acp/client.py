@@ -1863,7 +1863,7 @@ def _make_unified_diff(old: str, new: str, path: str, max_len: int = 6000) -> st
     return "".join(udiff).rstrip()[:max_len]
 
 
-def _select_tool_title(title: object, raw_input: object) -> str | None:
+def _select_tool_title(title: object, raw_input: object, kind: object = None) -> str | None:
     """Pick the pill label, preferring a human-readable `description` when present.
 
     Some backends' Bash tool emits a `description` field alongside `command`
@@ -1878,8 +1878,19 @@ def _select_tool_title(title: object, raw_input: object) -> str | None:
         desc = raw_input.get("description")
         if isinstance(desc, str) and desc.strip():
             return desc
-    if isinstance(title, str) and title:
+    # The flat title field defaults to an "unknown" sentinel when a backend
+    # omits it; treat that (and blanks) as absent rather than surfacing it.
+    if isinstance(title, str) and title and title != "unknown":
         return title
+    # Some backends omit the SDK title for a shell/exec tool and carry only the
+    # command in rawInput. Surface it for shell kinds only (so an fs tool's
+    # operation name is never mistaken for a command) instead of a bare kind
+    # label like "Run Command".
+    kind_str = kind if isinstance(kind, str) else None
+    if _is_shell_kind(kind_str) and isinstance(raw_input, dict):
+        cmd = raw_input.get("command")
+        if isinstance(cmd, str) and cmd.strip():
+            return cmd
     return None
 
 
@@ -5129,7 +5140,7 @@ class AcpClient:
                 # Cache the trusted tool name too, so the permission event can
                 # rebuild mcp__<server>__<tool> for per-tool governance.
                 self._tool_call_tool_name[tool_call_id] = _kiro_tool_name(update)
-            title = _select_tool_title(title, raw_input) or ""
+            title = _select_tool_title(title, raw_input, kind) or ""
             if title:
                 title, _ = redact_exfiltration_urls(title)
                 title, _ = redact_credentials(title)
@@ -5286,7 +5297,7 @@ class AcpClient:
         # Prefer rawInput.description over the SDK-supplied title (e.g.
         # Bash's "List KiroCrew ACP module files" rather than `ls /workplace/...`).
         # Same helper as `_extract_tool_event` so the rule is consistent.
-        title_source = _select_tool_title(title, raw_input)
+        title_source = _select_tool_title(title, raw_input, kind)
         title_str = ""
         if title_source:
             title_str, _ = redact_exfiltration_urls(title_source)

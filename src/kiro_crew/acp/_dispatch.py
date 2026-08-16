@@ -320,7 +320,7 @@ def make_unified_diff(old: str, new: str, path: str, max_len: int = 6000) -> str
     return "".join(udiff).rstrip()[:max_len]
 
 
-def select_tool_title(title: object, raw_input: object) -> str | None:
+def select_tool_title(title: object, raw_input: object, kind: object = None) -> str | None:
     """Pick the pill label, preferring a human-readable ``description`` when present.
 
     Some backends' Bash tool emits a ``description`` field alongside ``command``
@@ -334,8 +334,19 @@ def select_tool_title(title: object, raw_input: object) -> str | None:
         desc = raw_input.get("description")
         if isinstance(desc, str) and desc.strip():
             return desc
-    if isinstance(title, str) and title:
+    # The flat title field defaults to an "unknown" sentinel when a backend
+    # omits it; treat that (and blanks) as absent rather than surfacing it.
+    if isinstance(title, str) and title and title != "unknown":
         return title
+    # Some backends omit the SDK title for a shell/exec tool and carry only the
+    # command in rawInput. Surface it for shell kinds only (so an fs tool's
+    # operation name is never mistaken for a command) instead of a bare kind
+    # label like "Run Command".
+    kind_str = kind if isinstance(kind, str) else None
+    if is_shell_kind(kind_str) and isinstance(raw_input, dict):
+        cmd = raw_input.get("command")
+        if isinstance(cmd, str) and cmd.strip():
+            return cmd
     return None
 
 
@@ -709,7 +720,7 @@ def _build_tool_call_event(
         tool_input_cache[tool_call_id] = input_str
     if purpose:
         purpose = _redact(purpose)
-    title = select_tool_title(title, raw_input) or ""
+    title = select_tool_title(title, raw_input, kind) or ""
     if title:
         title = _redact(title)
     if kind:
@@ -977,7 +988,7 @@ def _build_tool_refinement_event(
         input_str = _redact(input_str)
         if tool_input_cache is not None:
             tool_input_cache[tool_use_id] = input_str
-    title_source = select_tool_title(title, raw_input)
+    title_source = select_tool_title(title, raw_input, kind)
     title_str = _redact(title_source) if title_source else ""
     kind_str = _redact(kind) if isinstance(kind, str) and kind else ""
     # The refinement's rawInput is the COMPLETE params object, so it carries the
