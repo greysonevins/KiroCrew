@@ -19,7 +19,13 @@ from __future__ import annotations
 
 import logging
 
-from kiro_crew.config.loader import KiroCrewConfig
+from kiro_crew.config.loader import (
+    ConfigReadError,
+    KiroCrewConfig,
+    config_local_path,
+    config_path,
+    read_config_for_update,
+)
 from kiro_crew.sel import sel
 
 logger = logging.getLogger(__name__)
@@ -43,6 +49,36 @@ _allowed_team_ids: set[str] = set()
 _allowlist_configured: bool = False
 
 
+def _config_load_degraded() -> bool:
+    """Return True when a config file exists on disk but ``load()`` degraded it.
+
+    ``KiroCrewConfig.load()`` swallows a torn or corrupt ``config.json`` (or its
+    ``config.local.json`` overlay), logs a warning, and returns a *defaults*
+    object rather than raising.  A defaults object carries an empty
+    ``slack.allowed_enterprise_ids``, which is indistinguishable from an operator
+    who configured no allowlist.
+
+    This helper positively detects that degraded case so the caller can fail
+    CLOSED instead of silently reopening the allowlist.  It delegates to
+    :func:`read_config_for_update`, which owns the "can this file be read as a
+    JSON object" question: an absent file returns ``{}`` (genuinely
+    unconfigured, so the allowlist stays default-open as designed), while an
+    unreadable file *or one holding valid non-object JSON* raises
+    ``ConfigReadError``.  That second case matters: ``[]`` parses cleanly yet
+    ``load()`` still discards it for defaults, so a hand-rolled ``json.loads``
+    probe would call it healthy and reopen the allowlist.  Reusing the shared
+    contract keeps this invariant in one home -- the same shape the publish
+    guards use.
+    """
+    for path in (config_path(), config_local_path()):
+        try:
+            read_config_for_update(path)
+        except ConfigReadError as e:
+            logger.warning("slack enterprise allowlist: %s", e)
+            return True
+    return False
+
+
 def _load_allowed_team_ids() -> None:
     """Populate ``_allowed_team_ids`` from validated state + config.
 
@@ -60,30 +96,77 @@ def _load_allowed_team_ids() -> None:
     any ``slack.allowed_enterprise_ids`` entries.  When none are
     configured the module stays default-open.
 
-    Config load failures are logged and SEL-audited but do not raise —
-    the cache falls back to just the validated team_id.
+    Fail-closed on a degraded read: ``KiroCrewConfig.load()`` degrades a
+    corrupt ``config.json`` (or a torn ``config.local.json`` overlay) to
+    defaults instead of raising.  The invariant this function holds is that
+    **degradation is decided before any value derived from the load is
+    trusted**: a degraded read can still return a non-empty allowlist (a
+    corrupt overlay leaves the base file's entries in place), so testing
+    "did the operator configure entries?" first would apply a list the
+    operator did not ask for.  When degradation is detected -- the load
+    raised, or a config file exists that ``read_config_for_update`` refuses
+    -- the module keeps ``_allowlist_configured`` True with only the
+    validated team_id admitted and SEL-audits it, rather than silently
+    widening the allowlist.
     """
     global _allowed_team_ids, _allowlist_configured
     allowed: set[str] = set()
     if _validated_team_id:
         allowed.add(_validated_team_id)
+
+    configured: set[str] = set()
+    load_failed = False
     try:
         cfg = KiroCrewConfig.load()
         configured = set(cfg.slack.allowed_enterprise_ids)
-        _allowlist_configured = bool(configured)
-        allowed.update(configured)
     except Exception:
+        load_failed = True
         logger.exception(
-            "Failed to load slack.allowed_enterprise_ids; "
-            "using validated team_id only"
+            "Failed to load slack.allowed_enterprise_ids; failing closed "
+            "with validated team_id only"
+        )
+
+    if load_failed or _config_load_degraded():
+        # We could NOT read the operator's configuration: load() raised, or a
+        # config file exists on disk that read_config_for_update refuses.
+        #
+        # This gate runs FIRST, before any value derived from the load is
+        # trusted, because a degraded read can still yield a NON-EMPTY
+        # ``configured``: load() merges config.local.json over config.json and
+        # swallows a torn overlay, so a corrupt overlay returns the BASE file's
+        # entries. Trusting those would silently apply an allowlist the operator
+        # did not ask for -- the same "a corrupt config widens the origin
+        # allowlist" failure this whole path exists to prevent, just arriving
+        # through the overlay instead of the base.
+        #
+        # An empty allowlist here is also indistinguishable from "operator
+        # configured none", so fail CLOSED either way: keep the allowlist
+        # "configured" with only the validated team_id admitted so
+        # check_message_origin() denies foreign origins, and SEL-audit it. We
+        # cannot know the intended list, so the authenticated workspace is the
+        # only thing we can honestly admit.
+        _allowlist_configured = True
+        logger.error(
+            "slack.allowed_enterprise_ids could not be read (corrupt config); "
+            "failing closed with validated team_id only"
         )
         sel().log_api_access(
             caller="gateway",
             operation="slack.allowed_team_ids_load",
-            outcome="error",
+            outcome="denied",
             source="startup",
-            error="config_load_failed",
+            error="config_load_degraded_fail_closed",
         )
+    elif configured:
+        # Every config file read cleanly and the operator configured an
+        # allowlist.
+        _allowlist_configured = True
+        allowed.update(configured)
+    else:
+        # Genuinely unconfigured: no config file, or a clean file with no
+        # allowlist entries.  Stay default-open exactly as before.
+        _allowlist_configured = False
+
     _allowed_team_ids = allowed
 
 

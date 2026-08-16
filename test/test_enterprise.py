@@ -17,8 +17,15 @@ from kiro_crew.slack import enterprise
 
 
 @pytest.fixture(autouse=True)
-def _reset_module_state():
-    """Reset cached module state and silence SEL between tests."""
+def _reset_module_state(tmp_path, monkeypatch):
+    """Reset cached module state and silence SEL between tests.
+
+    ``_load_allowed_team_ids`` now inspects ``config.json`` on disk to tell a
+    corrupt config apart from a genuinely unconfigured allowlist, so every test
+    runs against an isolated, initially-empty ``KIROCREW_HOME`` to avoid coupling
+    to the developer's / CI runner's ambient config file.
+    """
+    monkeypatch.setenv("KIROCREW_HOME", str(tmp_path))
     enterprise._validated_team_id = ""
     enterprise._validated_enterprise_id = ""
     enterprise._allowed_team_ids = set()
@@ -343,3 +350,136 @@ def test_governance_posture_empty_enterprise_id_ok_when_not_pinned():
             assert enterprise.validate_enterprise("xoxb-token") is True
     finally:
         ctx_mod.reset_context()
+
+
+# --------------------------------------------------------------------------
+# Fail-closed: a corrupt config.json silently reopens the allowlist (#3945).
+#
+# KiroCrewConfig.load() degrades a torn/corrupt config to a *defaults* object
+# instead of raising, so allowed_enterprise_ids comes back empty -- which the
+# old code could not tell apart from "operator configured no allowlist" and so
+# fell back to default-open. These tests exercise the REAL loader against a
+# genuinely malformed file on disk.
+# --------------------------------------------------------------------------
+
+
+def test_corrupt_config_json_fails_closed(tmp_path):
+    """A malformed config.json must fail CLOSED, not reopen the allowlist.
+
+    Regression for #3945: writes a malformed config.json, then asserts
+    check_message_origin() REFUSES a foreign team_id (and still admits the
+    validated one). Without the fix _allowlist_configured flips False and the
+    foreign origin is accepted default-open.
+    """
+    (tmp_path / "config.json").write_text("{ not valid json ", encoding="utf-8")
+    # State reached inside validate_enterprise() after auth.test caches the
+    # workspace team_id; then the allowlist is (re)loaded from the corrupt file.
+    enterprise._validated_team_id = "T_VALIDATED"
+    enterprise._load_allowed_team_ids()
+
+    # The degraded read is treated as "could not read config", not "unconfigured".
+    assert enterprise._allowlist_configured is True
+    # Foreign origin denied; the validated workspace still admitted.
+    assert enterprise.check_message_origin("T_FOREIGN") is False
+    assert enterprise.check_message_origin("T_VALIDATED") is True
+
+
+def test_non_object_config_json_fails_closed(tmp_path):
+    """Valid JSON that is not an OBJECT must also fail CLOSED.
+
+    ``[]`` parses cleanly, so a bare ``json.loads`` probe calls the file healthy
+    -- but ``load()`` still discards a non-dict for defaults, so the allowlist
+    would reopen through this sibling branch. Delegating to
+    ``read_config_for_update`` closes it, since that raises ``ConfigReadError``
+    for a non-object too.
+    """
+    (tmp_path / "config.json").write_text("[]", encoding="utf-8")
+    enterprise._validated_team_id = "T_VALIDATED"
+    enterprise._load_allowed_team_ids()
+
+    assert enterprise._allowlist_configured is True
+    assert enterprise.check_message_origin("T_FOREIGN") is False
+    assert enterprise.check_message_origin("T_VALIDATED") is True
+
+
+def test_corrupt_config_json_degradation_is_sel_audited(tmp_path):
+    """The fail-closed degradation must be SEL-audited."""
+    (tmp_path / "config.json").write_text("}{ broken", encoding="utf-8")
+    sel_mock = MagicMock()
+    enterprise._validated_team_id = "T_VALIDATED"
+    with patch.object(enterprise, "sel", return_value=sel_mock):
+        enterprise._load_allowed_team_ids()
+    audited = [
+        c.kwargs
+        for c in sel_mock.log_api_access.call_args_list
+        if c.kwargs.get("error") == "config_load_degraded_fail_closed"
+    ]
+    assert audited, "expected a SEL audit entry for the degraded config load"
+    assert audited[-1]["outcome"] == "denied"
+
+
+def test_corrupt_config_local_overlay_fails_closed(tmp_path):
+    """A malformed config.local.json overlay must also fail CLOSED.
+
+    The user-owned overlay carries operator config that survives upgrades; a
+    torn overlay silently drops the allowlist the same way a torn base does.
+    """
+    # Valid base, corrupt overlay -> load() degrades the overlay to a warning
+    # and drops it; the on-disk overlay still parses-fails, so we fail closed.
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "config.local.json").write_text("{ broken overlay ", encoding="utf-8")
+    enterprise._validated_team_id = "T_VALIDATED"
+    enterprise._load_allowed_team_ids()
+
+    assert enterprise._allowlist_configured is True
+    assert enterprise.check_message_origin("T_FOREIGN") is False
+
+
+def test_corrupt_overlay_does_not_retain_base_allowlist(tmp_path):
+    """A corrupt overlay must not leave the BASE file's allowlist in force.
+
+    ``load()`` merges ``config.local.json`` over ``config.json`` and swallows a
+    torn overlay, so the base file's entries survive and ``configured`` comes
+    back NON-EMPTY. Testing "did the operator configure entries?" before testing
+    for degradation therefore applied a list the operator did not ask for -- the
+    operator's overlay (which may narrow the base) was silently dropped. The
+    degradation gate runs first, so this fails closed to the validated team_id.
+    """
+    (tmp_path / "config.json").write_text(
+        '{"slack": {"allowed_enterprise_ids": ["T_BASE_ONLY"]}}', encoding="utf-8"
+    )
+    (tmp_path / "config.local.json").write_text("{ torn overlay", encoding="utf-8")
+    enterprise._validated_team_id = "T_VALIDATED"
+    enterprise._load_allowed_team_ids()
+
+    assert enterprise._allowlist_configured is True
+    # The base entry is NOT admitted: we cannot know the overlay's intent.
+    assert enterprise.check_message_origin("T_BASE_ONLY") is False
+    assert enterprise.check_message_origin("T_FOREIGN") is False
+    # The authenticated workspace stays admitted.
+    assert enterprise.check_message_origin("T_VALIDATED") is True
+
+
+def test_clean_config_no_allowlist_stays_default_open(tmp_path):
+    """Healthy path preserved: a clean config with no allowlist is default-open.
+
+    Guards against over-fail-closing -- a genuinely unconfigured allowlist (a
+    valid config file that simply lists none) must stay default-open exactly as
+    before the fix.
+    """
+    (tmp_path / "config.json").write_text('{"slack": {}}', encoding="utf-8")
+    enterprise._validated_team_id = "T_VALIDATED"
+    enterprise._load_allowed_team_ids()
+
+    assert enterprise._allowlist_configured is False
+    assert enterprise.check_message_origin("T_FOREIGN") is True
+
+
+def test_no_config_file_stays_default_open(tmp_path):
+    """A never-set-up home (no config file at all) stays default-open."""
+    # tmp_path has no config.json / config.local.json.
+    enterprise._validated_team_id = "T_VALIDATED"
+    enterprise._load_allowed_team_ids()
+
+    assert enterprise._allowlist_configured is False
+    assert enterprise.check_message_origin("T_FOREIGN") is True

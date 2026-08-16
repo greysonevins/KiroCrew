@@ -4,6 +4,22 @@ All notable changes to KiroCrew are documented in this file.
 
 ## [Unreleased]
 
+- **A corrupt `config.json` no longer silently reopens the Slack
+  enterprise-origin allowlist.** `KiroCrewConfig.load()` degrades a torn or
+  malformed config to a defaults object instead of raising, so
+  `slack.allowed_enterprise_ids` came back empty -- indistinguishable from
+  "operator configured no allowlist" -- and `check_message_origin()` fell back
+  to its default-open path, accepting messages from any Slack workspace with no
+  error surfaced. `slack/enterprise.py` now asks `read_config_for_update` -- the
+  shared "can this file be read as a JSON object" contract -- and fails CLOSED
+  whenever it raises: it keeps the allowlist enforced with only the validated
+  `team_id` admitted and SEL-audits the degradation, while a genuinely
+  unconfigured allowlist stays default-open exactly as before. That contract also
+  covers valid non-object JSON (`[]` parses, yet `load()` still discards it for
+  defaults), which a bare parse check would have called healthy. Same root cause
+  as the publish allowlist fixed in #3615, at a call site that fix did not
+  cover. (#3945)
+
 - **A knowledge source that errored during ingestion is no longer re-synced on
   every sweep.** `KnowledgeIngestion` marks failure in the `sync_status`
   **column**, but `SyncScheduler.sync_all`'s skip predicate read only the
