@@ -2350,6 +2350,12 @@ async def start_dashboard(
         client_max_size=60 * 1024 * 1024
     )  # 60 MB: covers 50 MB upload + multipart overhead
     app["state"] = state
+    # Bind the serving loop once, here: this runs ON that loop, so every
+    # surface that later hands work in from a foreign thread -- slots
+    # coalescing, an off-loop websocket send, the log handler's fan-out --
+    # resolves the same loop instead of each latching its own copy from
+    # whichever thread happens to arrive first.
+    state.bind_serving_loop(asyncio.get_running_loop())
     # Voice settings live in slack/handler's module state and are otherwise
     # loaded only on the Slack startup path (set_orch_cfg) — without this a
     # dashboard-only gateway (no Slack tokens) resets TTS to defaults on
@@ -3312,6 +3318,12 @@ async def start_api_server(
         client_max_size=60 * 1024 * 1024
     )  # 60 MB: covers 50 MB upload + multipart overhead
     app["state"] = state
+    # Bind the serving loop once, here: this runs ON that loop, so every
+    # surface that later hands work in from a foreign thread -- slots
+    # coalescing, an off-loop websocket send, the log handler's fan-out --
+    # resolves the same loop instead of each latching its own copy from
+    # whichever thread happens to arrive first.
+    state.bind_serving_loop(asyncio.get_running_loop())
     # Voice settings live in slack/handler's module state and are otherwise
     # loaded only on the Slack startup path (set_orch_cfg) — without this a
     # dashboard-only gateway (no Slack tokens) resets TTS to defaults on

@@ -780,11 +780,16 @@ class TestSafeWsSend:
 class TestRingLogHandler:
     """The always-on ring buffer plus its WebSocket fan-out."""
 
-    def test_set_state_off_the_loop_records_no_loop(self):
-        """Installed at import time on some paths, where no loop is running yet."""
+    def test_set_state_keeps_no_loop_of_its_own(self):
+        """The handler defers to the dashboard's one serving loop.
+
+        It is installed at import time on some paths, where no loop is running
+        yet, so latching one here would record None and silently drop every later
+        fan-out. Resolving through the state at emit time is what avoids that.
+        """
         handler = updates._RingLogHandler(collections.deque(maxlen=4))
         handler.set_state(MagicMock())
-        assert handler._loop is None
+        assert not hasattr(handler, "_loop")
 
     def test_emit_appends_to_the_ring_and_honours_maxlen(self):
         ring: collections.deque[str] = collections.deque(maxlen=2)
@@ -816,8 +821,8 @@ class TestRingLogHandler:
         ws.send_str = AsyncMock()
         state = MagicMock()
         state._ws_log_subscribers = {ws}
+        state.serving_loop = asyncio.get_running_loop()
         handler.set_state(state)
-        assert handler._loop is asyncio.get_running_loop()
 
         handler.emit(_record("broadcast me"))
         # The fan-out is scheduled via call_soon_threadsafe, so it lands on a
@@ -862,8 +867,10 @@ class TestRingLogHandler:
         state = MagicMock()
         state._ws_log_subscribers = {MagicMock()}
         handler._state = state
-        handler._loop = MagicMock()
-        handler._loop.call_soon_threadsafe.side_effect = RuntimeError("event loop is closed")
+        state.serving_loop = MagicMock()
+        state.serving_loop.call_soon_threadsafe.side_effect = RuntimeError(
+            "event loop is closed"
+        )
 
         handler.emit(_record("during shutdown"))
 
