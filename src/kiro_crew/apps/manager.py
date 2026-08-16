@@ -1887,6 +1887,34 @@ def _app_declares_backend(app_data: dict[str, Any]) -> bool:
     return resolve_mcp_backend_url(app_data.get("mcpServers")) is not None
 
 
+def builtin_app_definitions() -> list[dict[str, Any]]:
+    """The builtin app DEFINITIONS as shipped, merged in precedence order.
+
+    Read from the PACKAGE (``builtins/`` + each edition ``AppsLoader``
+    ``manifest_sources()`` dir), never from ``apps_dir()`` — so this is the
+    immutable, shipped view of what a builtin declares, as opposed to the
+    per-host copy under ``apps_dir()`` which a self-managed app may rewrite
+    (see ``list_apps``). A caller that must trust a manifest FIELD rather than
+    merely read it back has to source it here.
+
+    Side-effect free and safe to call from a request path (it is I/O — a
+    directory walk per source — so call it off the event loop).
+
+    Precedence, ADD-only: the hardcoded ``_BUILTIN_APPS`` seam wins on a name
+    collision, then the package's own ``builtins/``, then edition-contributed
+    apps. ``register_builtin_apps`` consumes exactly this list, so the set a
+    guard inspects can never disagree with the set that gets registered.
+    """
+    discovered = discover_builtin_apps()
+    discovered_names = {a["name"] for a in discovered}
+    for app_data in _edition_builtin_apps():
+        if app_data["name"] not in discovered_names:
+            discovered_names.add(app_data["name"])
+            discovered.append(app_data)
+    hardcoded_names = {a["name"] for a in _BUILTIN_APPS}
+    return list(_BUILTIN_APPS) + [a for a in discovered if a["name"] not in hardcoded_names]
+
+
 def register_builtin_apps() -> int:
     """Register built-in dashboard features as app entries.
 
@@ -1910,17 +1938,10 @@ def register_builtin_apps() -> int:
        companion contributes its feature apps).  ADD-only: the hardcoded list
        and the package's own builtins still take precedence on name collision.
     """
-    # Merge hardcoded list with auto-discovered builtins + edition-contributed
-    # builtins (PlatformContext).  Standalone contributes nothing extra
-    # (manifest_sources == []), so ``discovered`` is exactly the package's
-    # builtins/ dir — unchanged from today.
-    discovered = discover_builtin_apps()
-    discovered_names = {a["name"] for a in discovered}
-    for app_data in _edition_builtin_apps():
-        if app_data["name"] not in discovered_names:
-            discovered_names.add(app_data["name"])
-            discovered.append(app_data)
-    hardcoded_names = {a["name"] for a in _BUILTIN_APPS}
+    # The merged, shipped definition set — see ``builtin_app_definitions``.
+    # Sourced through that accessor (rather than merged inline again) so a guard
+    # that has to TRUST a definition field inspects exactly what gets registered.
+    all_builtins = builtin_app_definitions()
 
     # Clean up apps that have been escalated to built-in surfaces, merged into
     # an existing surface, or removed from the fork — delete stale installed
@@ -2080,10 +2101,6 @@ def register_builtin_apps() -> int:
                 os.close(fd)
             if parent_fd >= 0:
                 os.close(parent_fd)
-    # Discovered apps that aren't already in the hardcoded list
-    extra = [a for a in discovered if a["name"] not in hardcoded_names]
-    all_builtins = list(_BUILTIN_APPS) + extra
-
     count = 0
     for app_data in all_builtins:
         # Validate definition — skip invalid entries without affecting others

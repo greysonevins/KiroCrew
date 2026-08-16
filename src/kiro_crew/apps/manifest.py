@@ -790,6 +790,14 @@ class PublishProviderConfig:
     )
     kinds: list[str] = field(default_factory=list)  # supported artifact kinds (empty = all)
     setupRoute: str = ""  # UI route to the app's setup/console page  # noqa: N815
+    # "public" (default) | "internal" — who can reach the published artifact.
+    # A `public` destination serves bytes on the open internet with no
+    # authentication, which is what the panel's exposure warning + blocking
+    # acknowledgment are about; `internal` declares the destination is
+    # access-controlled by the deployment. Resolved (and fail-safed back to
+    # "public") in apps.routes._publish_audience — kept as a plain string here
+    # because a manifest is untrusted input and this dataclass does not validate.
+    audience: str = "public"
     configFile: str = "config.json"  # relative to <app_dir>/data/  # noqa: N815
     configuredField: str = (
         ""  # field in configFile that must be non-empty to count as configured  # noqa: N815
@@ -809,6 +817,10 @@ class PublishProviderConfig:
             d["kinds"] = self.kinds
         if self.setupRoute:
             d["setupRoute"] = self.setupRoute
+        # Emitted only when it differs from the guarded default, so a manifest
+        # that says nothing keeps round-tripping unchanged.
+        if self.audience and self.audience != "public":
+            d["audience"] = self.audience
         if self.configFile != "config.json":
             d["configFile"] = self.configFile
         if self.configuredField:
@@ -824,6 +836,7 @@ class PublishProviderConfig:
             endpoint=str(data.get("endpoint", "")),
             kinds=[str(k) for k in data.get("kinds", []) if k],
             setupRoute=str(data.get("setupRoute", "")),  # noqa: N815
+            audience=str(data.get("audience", "public")),
             configFile=str(data.get("configFile", "config.json")),  # noqa: N815
             configuredField=str(data.get("configuredField", "")),  # noqa: N815
         )

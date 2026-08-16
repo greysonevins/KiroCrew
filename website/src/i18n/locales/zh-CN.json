@@ -5600,9 +5600,11 @@
       "content_changed_since_preview_re_run_publish_to": "预览后内容已更改 — 重新运行发布以按当前版本确认。",
       "credential_security_findings_cannot_be_overridde": "凭据/安全类问题无法忽略。发布前请从工件中\n                移除检测到的密钥。",
       "done": "已完成",
+      "internal_destination_note": "访问受控的发布目标 — 已发布的制品无法从公共互联网访问。",
       "kb": "KB",
       "no_publish_providers_available_for_this_artifact": "此类工件没有可用的发布渠道。",
       "override_publish_anyway": "覆盖并强制发布",
+      "public_exposure_warning": "任何拥有已发布链接的人都可以查看此内容。它通过公共互联网提供，且没有任何身份验证。",
       "publish": "发布",
       "publish_failed": "发布失败",
       "published": "已发布！",
@@ -5615,8 +5617,7 @@
       "size": "大小：",
       "ttl_time_to_live": "TTL（存活时间）",
       "unexpected_response": "意外的响应",
-      "via": "通过",
-      "public_exposure_warning": "任何拥有已发布链接的人都可以查看此内容。它通过公共互联网提供，且没有任何身份验证。"
+      "via": "通过"
     },
     "pullRequestPanel": {
       "a_reviewer": "某位评审者",

@@ -5684,9 +5684,11 @@
       "content_changed_since_preview_re_run_publish_to": "Inhalt hat sich seit der Vorschau geändert — führe die Veröffentlichung erneut aus, um die aktuelle Version zu bestätigen.",
       "credential_security_findings_cannot_be_overridde": "Funde zu Anmeldedaten/Sicherheit können nicht übergangen werden. Entfernen Sie die erkannten Secrets aus\n                Ihrem Artefakt, bevor Sie veröffentlichen.",
       "done": "Fertig",
+      "internal_destination_note": "Zugriffsbeschränktes Ziel – das veröffentlichte Artefakt ist über das öffentliche Internet nicht erreichbar.",
       "kb": "KB",
       "no_publish_providers_available_for_this_artifact": "Keine Veröffentlichungsanbieter für diese Artefaktart verfügbar.",
       "override_publish_anyway": "Überschreiben & trotzdem veröffentlichen",
+      "public_exposure_warning": "Jeder mit dem veröffentlichten Link kann diesen Inhalt sehen. Er wird ohne Authentifizierung im öffentlichen Internet bereitgestellt.",
       "publish": "Veröffentlichen",
       "publish_failed": "Veröffentlichen fehlgeschlagen",
       "published": "Veröffentlicht!",
@@ -5700,8 +5702,7 @@
       "size": "Größe:",
       "ttl_time_to_live": "TTL (Lebensdauer)",
       "unexpected_response": "Unerwartete Antwort",
-      "via": "über",
-      "public_exposure_warning": "Jeder mit dem veröffentlichten Link kann diesen Inhalt sehen. Er wird ohne Authentifizierung im öffentlichen Internet bereitgestellt."
+      "via": "über"
     },
     "pullRequestPanel": {
       "a_reviewer": "ein Reviewer",

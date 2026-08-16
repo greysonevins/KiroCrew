@@ -2613,4 +2613,12 @@ export interface AppPublishProvider {
   configured: boolean
   setupRoute: string
   endpoint: string
+  /**
+   * Who can reach the published artifact. Optional on the wire so a dashboard
+   * served by an older backend still type-checks; readers MUST treat anything
+   * other than the literal `'internal'` as `'public'` (see
+   * `providerAudience` in PublishHub) so a missing field keeps the
+   * public-exposure warning rather than silently dropping it.
+   */
+  audience?: 'public' | 'internal'
 }

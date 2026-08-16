@@ -5600,9 +5600,11 @@
       "content_changed_since_preview_re_run_publish_to": "プレビュー以降、コンテンツが変更されました — 現在のバージョンで確認するため、パブリッシュを再実行してください。",
       "credential_security_findings_cannot_be_overridde": "認証情報/セキュリティの検出結果はオーバーライドできません。パブリッシュする前に、\n                アーティファクトから検出されたシークレットを削除してください。",
       "done": "完了",
+      "internal_destination_note": "アクセス制御された公開先です。公開されたアーティファクトはパブリックインターネットからアクセスできません。",
       "kb": "KB",
       "no_publish_providers_available_for_this_artifact": "このアーティファクトの種類で利用可能なパブリッシュプロバイダーはありません。",
       "override_publish_anyway": "オーバーライドしてとにかくパブリッシュ",
+      "public_exposure_warning": "公開されたリンクを知っている人は誰でもこのコンテンツを閲覧できます。認証なしで公開インターネット上に配信されます。",
       "publish": "パブリッシュ",
       "publish_failed": "パブリッシュに失敗",
       "published": "パブリッシュされました！",
@@ -5615,8 +5617,7 @@
       "size": "サイズ:",
       "ttl_time_to_live": "TTL(有効期限)",
       "unexpected_response": "予期しないレスポンス",
-      "via": "経由",
-      "public_exposure_warning": "公開されたリンクを知っている人は誰でもこのコンテンツを閲覧できます。認証なしで公開インターネット上に配信されます。"
+      "via": "経由"
     },
     "pullRequestPanel": {
       "a_reviewer": "レビュアー",

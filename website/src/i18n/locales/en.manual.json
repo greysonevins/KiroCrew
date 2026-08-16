@@ -1693,13 +1693,14 @@
     "publishHub": {
       "checking": "Checking…",
       "content_changed_since_preview_re_run_publish_to": "Content changed since preview — re-run publish to confirm with the current version.",
+      "internal_destination_note": "Access-controlled destination — the published artifact is not reachable from the public internet.",
       "override_publish_anyway": "Override & Publish Anyway",
+      "public_exposure_warning": "Anyone with the published link can view this content. It is served on the public internet with no authentication.",
       "publish_failed": "Publish failed",
       "publishing_2": "Publishing…",
       "scan_blocked_finding_one": "Scan blocked ({{count}} finding)",
       "scan_blocked_finding_other": "Scan blocked ({{count}} findings)",
-      "unexpected_response": "Unexpected response",
-      "public_exposure_warning": "Anyone with the published link can view this content. It is served on the public internet with no authentication."
+      "unexpected_response": "Unexpected response"
     },
     "pullRequestPanel": {
       "all_checks_passed": "All checks passed",

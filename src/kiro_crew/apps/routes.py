@@ -57,6 +57,7 @@ from kiro_crew.apps.lifecycle_scripts import run_lifecycle_script as _run_lifecy
 from kiro_crew.apps.manager import (
     app_lifecycle_lock,
     apps_dir,
+    builtin_app_definitions,
     cleanup_migrated_builtin,
     disable_app,
     enable_app,
@@ -240,6 +241,130 @@ def _provider_is_configured(app_name: str, pp: dict[str, Any]) -> bool:
     return bool(isinstance(cfg, dict) and str(cfg.get(field_name, "")).strip())
 
 
+PUBLISH_AUDIENCES = ("public", "internal")
+"""Declared reach of a publish destination (``publishProvider.audience``).
+
+``public`` — the published URL is served on the public internet with no
+authentication, so the Publish panel shows its exposure warning and requires a
+blocking acknowledgment. ``internal`` — the destination is access-controlled by
+the deployment (SSO, corporate network, an authenticated registry), so that
+warning would be false and the acknowledgment would be asking a human to
+confirm an exposure that is not happening.
+"""
+
+PUBLISH_AUDIENCE_DEFAULT = "public"
+
+
+def _is_distribution_app(app: dict[str, Any]) -> bool:
+    """Whether *app*'s installed entry was written by builtin registration.
+
+    Mirrors ``manager._builtin_owns_install`` — ``source == "builtin"`` (whose
+    ONLY writer is ``register_builtin_apps``) with ``origin == "builtin"`` as the
+    legacy secondary signal. Re-derived rather than imported because that helper
+    takes an ``InstalledApp``, not the dict this module receives;
+    ``test_publish_providers`` pins the two against each other so they cannot
+    drift.
+
+    Testing ``origin`` ALONE would be wrong in a way that fails silently: builtin
+    re-registration sets ``origin = "local"`` for a builtin that ships a UI bundle
+    (``manager.py``, ``has_ui_bundle``), so the first distribution-shipped publish
+    destination with its own UI would have its ``internal`` declaration quietly
+    coerced to ``public``.
+
+    This is installed METADATA, which lives in the writable app registry dir and
+    is therefore only half the check — see ``_shipped_audience``.
+    """
+    return str(app.get("source", "")) == "builtin" or str(app.get("origin", "")) == "builtin"
+
+
+def _shipped_audience(app_name: str) -> str | None:
+    """``publishProvider.audience`` for *app_name* as SHIPPED, else ``None``.
+
+    Read from the in-package builtin DEFINITIONS
+    (``manager.builtin_app_definitions``), never from ``apps_dir()``. That is the
+    whole point: the per-host manifest copy and the installed metadata both live
+    in a writable directory, and ``list_apps`` documents that a self-managed app
+    may rewrite its own ``app.json`` — so a value that removes a human safeguard
+    cannot be sourced from there. The definition set comes from the installed
+    package (plus each edition ``AppsLoader.manifest_sources()`` dir, also inside
+    a package), which an app cannot rewrite without already holding
+    gateway-level filesystem access.
+
+    ``None`` means "not a shipped builtin, or unreadable", and every failure path
+    returns it — the caller treats that as "not internal", so this is fail-closed
+    by construction.
+    """
+    try:
+        for definition in builtin_app_definitions():
+            if str(definition.get("name", "")) != app_name:
+                continue
+            pp = definition.get("publishProvider")
+            if not isinstance(pp, dict):
+                return None
+            raw = pp.get("audience", PUBLISH_AUDIENCE_DEFAULT)
+            return raw.strip().lower() if isinstance(raw, str) else None
+    except Exception:  # pragma: no cover — fail closed on any discovery failure
+        logger.warning(
+            "could not read shipped builtin definitions while resolving the publish "
+            "audience for app %r — treating as %r",
+            app_name,
+            PUBLISH_AUDIENCE_DEFAULT,
+            exc_info=True,
+        )
+    return None
+
+
+def _publish_audience(app_name: str, pp: dict[str, Any], app: dict[str, Any] | None = None) -> str:
+    """Resolve ``publishProvider.audience``, defaulting to the guarded value.
+
+    Fail-safe by construction: an absent, non-string or unrecognised value
+    resolves to ``public``, so the exposure warning is only dropped by a
+    destination that explicitly and validly declares itself access-controlled.
+
+    ``internal`` additionally requires BOTH halves of provenance, because either
+    alone is forgeable:
+
+    * the DECLARATION must be present in the shipped, in-package definition
+      (``_shipped_audience``) — so rewriting the writable per-host ``app.json``
+      claims nothing; and
+    * the installed entry must be builtin-owned (``_is_distribution_app``) — so a
+      third-party app cannot inherit a shipped builtin's declaration by
+      occupying its name.
+
+    Anything else resolves to ``public`` with a warning. Without this the guard is
+    honor-system: any enabled app could declare ``internal`` and publish a
+    world-readable URL with no acknowledgment.
+    """
+    raw = pp.get("audience", PUBLISH_AUDIENCE_DEFAULT)
+    audience = raw.strip().lower() if isinstance(raw, str) else ""
+    if audience == "internal":
+        shipped = _shipped_audience(app_name)
+        if shipped != "internal" or not _is_distribution_app(app or {}):
+            logger.warning(
+                "publish provider for app %r declares audience 'internal', but the "
+                "shipped definition says %r and the installed entry reports "
+                "source=%r origin=%r — treating as %r, so the public-exposure "
+                "warning and acknowledgment stay in place",
+                app_name,
+                shipped,
+                (app or {}).get("source", ""),
+                (app or {}).get("origin", ""),
+                PUBLISH_AUDIENCE_DEFAULT,
+            )
+            return PUBLISH_AUDIENCE_DEFAULT
+    if audience in PUBLISH_AUDIENCES:
+        return audience
+    logger.warning(
+        "publish provider for app %r declares unknown audience %r "
+        "(expected one of %s) — treating as %r",
+        app_name,
+        raw,
+        ", ".join(PUBLISH_AUDIENCES),
+        PUBLISH_AUDIENCE_DEFAULT,
+    )
+    return PUBLISH_AUDIENCE_DEFAULT
+
+
 def collect_publish_providers(
     apps: list[dict[str, Any]],
     configured_resolver: Any = None,
@@ -256,6 +381,15 @@ def collect_publish_providers(
     ``/api/apps/<that-app>/`` — an app cannot declare an endpoint that routes to
     another app's namespace or to a core API. Non-conforming endpoints are dropped
     with a warning log.
+
+    ``audience`` (``public`` | ``internal``, default ``public``) declares who can
+    reach the published artifact, and it is what drives the panel's
+    public-exposure warning + blocking acknowledgment. It is fail-safe in both
+    directions: an absent field and an unrecognised value both resolve to
+    ``public``, so a destination only loses that warning by saying so explicitly —
+    and ``internal`` is honored only for a BUILTIN app (see
+    ``_publish_audience``), so an installed app cannot silence a safeguard for a
+    destination nobody else can inspect.
     """
     resolver = configured_resolver or _provider_is_configured
     providers: list[dict[str, Any]] = []
@@ -297,6 +431,7 @@ def collect_publish_providers(
                 "endpoint": endpoint,
                 "kinds": [str(k) for k in pp.get("kinds", []) if k],
                 "setupRoute": str(pp.get("setupRoute", "")),
+                "audience": _publish_audience(app_name, pp, app),
                 "app": app_name,
                 "origin": "app",
                 "configured": bool(resolver(app_name, pp)),
@@ -408,6 +543,11 @@ async def handle_publish_providers(request: web.Request) -> web.Response:
             "endpoint": "/api/deploy/deploy",
             "kinds": ["widget", "html", "markdown"],
             "setupRoute": "/artifacts/deploy",
+            # Set HERE, by the core, rather than inherited from a default: this is
+            # the one destination that genuinely serves bytes on the public
+            # internet with no authentication, so its exposure warning and
+            # blocking acknowledgment must not be reachable by an app manifest.
+            "audience": PUBLISH_AUDIENCE_DEFAULT,
             "app": "",
             "origin": "core",
             "configured": configured,

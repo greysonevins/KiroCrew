@@ -4,6 +4,40 @@ All notable changes to KiroCrew are documented in this file.
 
 ## [Unreleased]
 
+- **A succeeded publish no longer renders as a blank error, and an
+  access-controlled destination no longer claims to be world-readable.** The
+  Publish panel recognized only the deploy-shaped `{url}` response, so a
+  provider that hands its confirmed publish to `POST
+  /api/artifacts/{slug}/publish` — the supported way to reuse the core's single
+  publish authorization and audit trail — got its serialized-artifact response
+  read as "no url", fell through to `{url: ''}` and rendered the ERROR branch
+  with an undefined message: a bare red icon, no text, on a publish that had in
+  fact succeeded (the bytes were pushed and `publication` was persisted).
+  `readPublishOutcome` now reads both shapes, success is signalled by the return
+  shape rather than inferred from a non-empty url (a destination can publish and
+  expose no browsable link), an unrecognized shape is reported as a NAMED error
+  instead of an empty one, and — the mirror-image lie — a 200 whose
+  `publication.last_error` is non-empty is reported as that error rather than as
+  "Published!" (`publish_sync.publish()` treats the version push as best-effort
+  on a re-publish: it persists the failure and returns normally, so the remote
+  content is stale behind a 200). Separately,
+  `publishProvider.audience` (`public` | `internal`, default `public`) lets a
+  destination declare that its reach is access-controlled, which drops the
+  public-exposure warning and the blocking acknowledgment for that row only and
+  replaces it with a positive "access-controlled destination" line. Both are
+  fail-safe: an absent, non-string or unrecognised value resolves to `public`
+  (with a warning log), the frontend trusts only the exact `'internal'` literal so
+  an older backend keeps the warning, `internal` requires BOTH halves of
+  provenance — the declaration present in the SHIPPED in-package builtin
+  definition (a writable per-host `app.json` claims nothing) AND a builtin-owned
+  installed entry (so an app occupying a shipped builtin's name cannot inherit its
+  declaration) — and the core `deploy-web-aws` row —
+  the one genuinely unauthenticated destination — sets `audience` itself so no app
+  manifest can un-guard it. Secret-scan blocking is untouched: a credential
+  finding remains non-overridable, and the scan-OVERRIDE acknowledgment is
+  required for BOTH audiences, because knowingly publishing flagged content is a
+  risk independent of the destination's reach.
+
 - **`test_redaction_timing_scales_linearly` no longer fails CI
   intermittently** (observed "Redaction scaled super-linearly: 3.2x, limit
   3.0x" on an otherwise-healthy matcher). The test took ONE

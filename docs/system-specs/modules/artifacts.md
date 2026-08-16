@@ -245,6 +245,88 @@ provider's first page are reachable rather than silently truncated.
   sandboxed iframe (same security model as inline `<mcwidget>`), with a
   version dropdown
 
+### Publish panel (`PublishHub`) — audience and success shapes
+
+One row per destination returned by `GET /api/publish-providers`
+(`apps/routes.py`): the app-declared providers plus the core `deploy-web-aws`
+row. Two properties of that row drive the panel and are easy to get wrong.
+
+**`audience` (`public` | `internal`, default `public`)** declares who can reach
+the published artifact, and it is the ONLY thing that removes the
+public-exposure warning and the blocking `PublicPublishAckModal`. That
+acknowledgment exists because a `public` destination serves the bytes on the
+open internet with no authentication — it is the last thing between a human and
+a world-readable URL. On an `internal` destination (an authenticated registry, a
+corporate-network-only host) the same copy is false, and a confirmation people
+learn to click through is worse than none, because the same dialog also guards
+the public row. The internal confirm step instead carries a POSITIVE statement
+(`internal_destination_note`), so the operator reads what the destination is
+rather than having to notice a missing warning.
+
+Resolution is fail-safe at every layer: `_publish_audience` resolves an absent,
+non-string or unrecognised value to `public` with a warning log, the frontend's
+`providerAudience` trusts only the exact `'internal'` literal (so an older
+backend that omits the field keeps the warning), and the core `deploy-web-aws`
+row sets `audience` itself rather than inheriting a default, so no app manifest
+can un-guard the one genuinely public destination.
+
+**`internal` requires BOTH halves of provenance, because either alone is
+forgeable.** The DECLARATION must be present in the SHIPPED, in-package builtin
+definition (`_shipped_audience` → `manager.builtin_app_definitions`), and the
+installed entry must be builtin-owned (`_is_distribution_app`). The two close
+different holes: the per-host `app.json` and `installed.json` live in the writable
+app registry dir — `list_apps` documents self-managed apps rewriting their own
+manifest — so a manifest declaration proves nothing on its own; and an app that
+occupies a shipped builtin's name must not inherit that builtin's declaration, so
+installed ownership is checked too. Anything else resolves to `public` with a
+warning, and every failure path in `_shipped_audience` returns `None`, which the
+caller reads as "not internal" — fail-closed by construction. Note the metadata
+half deliberately mirrors `manager._builtin_owns_install` (`source`, with `origin`
+as the legacy signal) rather than testing `origin` alone: builtin re-registration
+sets `origin = "local"` for a builtin that ships a UI bundle, so an origin-only
+test would reject the first distribution-shipped destination with its own UI.
+
+`manager.builtin_app_definitions()` is the shared accessor for that shipped set,
+and `register_builtin_apps` consumes it too — so the definitions a guard inspects
+can never disagree with the definitions that get registered.
+
+A secret-scan block is unaffected — findings are refused, and a credential
+finding is never overridable, for either audience. The scan-OVERRIDE path is
+deliberately NOT forked on audience: what it confirms is knowingly publishing
+flagged content, and that risk is independent of the destination's reach (a
+secret disclosed to everyone behind the corporate SSO is still disclosed), so the
+acknowledgment is required there for both audiences. Its wording is
+public-specific, which today is unreachable on an internal row — the only
+producer of a `blocked/reason=scan` response is the core public-web deploy route
+— so erring toward the extra confirmation is the safe direction; audience-aware
+copy for that dialog is a follow-up, not a reason to drop the gate.
+
+**Two success shapes.** `PublishHub` posts to the row's declared `endpoint` and
+must recognize both:
+
+- `{url}` / `{public_url}` — the deploy shape (`POST /api/deploy/deploy`).
+- a serialized artifact carrying a `publication` block — what `POST
+  /api/artifacts/{slug}/publish` returns, which is where an app provider lands
+  when it hands the confirmed publish to the core route (the supported way to
+  reuse the core's single publish authorization + audit trail rather than
+  growing a second one). The link, when the destination exposes one, is
+  `publication.view_url`.
+
+`readPublishOutcome` is that reader, and success is signalled by its return
+shape, NOT by a non-empty url: a destination may publish successfully and expose
+no browsable link. Conflating the two rendered a succeeded publish as the error
+branch with an undefined message — a bare red icon and no text. Anything it does
+not recognize is reported as a NAMED error (`unexpected_response`);
+`publication: null` (an unpublished artifact) is not success, and an `error`
+field wins over any other field in the same body.
+
+**HTTP 200 is not success on the artifact shape.** `publish_sync.publish()`
+treats the version push as best-effort: on a re-publish it captures the push
+failure into `publication.last_error` and returns normally, so the route answers
+200 with stale remote content. A non-empty `last_error` is therefore an error
+outcome carrying the provider's own (already redacted) message — reading it as
+"Published!" would be the same lie as the blank error, in the other direction.
+
 ## Widget auto-registration
 
 **Every `<mcwidget>` the agent emits becomes an artifact automatically** — no

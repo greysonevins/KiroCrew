@@ -13,6 +13,7 @@ import json
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
+from pytest import MonkeyPatch as _MP
 
 from kiro_crew.apps.discovery import _manifest_to_builtin_dict
 from kiro_crew.apps.manager import APP_MANIFEST_FILENAME, apps_dir, enable_app, install_app
@@ -87,8 +88,14 @@ def test_discovery_propagates_publish_provider():
 # --- pure aggregation -------------------------------------------------------
 
 
-def _app(name, enabled, pp):
-    return {"name": name, "enabled": enabled, "manifest": ({"publishProvider": pp} if pp else {})}
+def _app(name, enabled, pp, origin="builtin", source="builtin"):
+    return {
+        "name": name,
+        "enabled": enabled,
+        "origin": origin,
+        "source": source,
+        "manifest": ({"publishProvider": pp} if pp else {}),
+    }
 
 
 def test_collect_only_enabled_with_provider():
@@ -114,6 +121,222 @@ def test_collect_skips_provider_without_id_or_endpoint():
     bad = {"label": "x"}  # no id, no endpoint
     res = collect_publish_providers([_app("x", True, bad)], configured_resolver=lambda n, pp: True)
     assert res == []
+
+
+# --- audience (public-exposure warning + acknowledgment driver) -------------
+
+
+def _collect_audience(
+    declared,
+    app_name="deploy-web",
+    origin="builtin",
+    source="builtin",
+    shipped="__same__",
+    monkeypatch=None,
+):
+    """Collect one provider row's resolved audience.
+
+    ``shipped`` is what the in-package builtin DEFINITION declares — the trusted
+    half. It defaults to whatever the on-disk manifest declares, so a test that
+    only cares about parsing does not have to think about provenance; pass it
+    explicitly (with ``monkeypatch``) to model the two halves disagreeing.
+    """
+    pp = dict(_PP)
+    pp["endpoint"] = f"/api/apps/{app_name}/deploy"
+    if declared is not None:
+        pp["audience"] = declared
+    shipped_value = declared if shipped == "__same__" else shipped
+    definition = {"name": app_name, "publishProvider": dict(pp)}
+    if shipped_value is None:
+        definition["publishProvider"].pop("audience", None)
+    else:
+        definition["publishProvider"]["audience"] = shipped_value
+    mp = monkeypatch or _MP()
+    mp.setattr(
+        "kiro_crew.apps.routes.builtin_app_definitions",
+        lambda: [definition],
+    )
+    res = collect_publish_providers(
+        [_app(app_name, True, pp, origin=origin, source=source)],
+        configured_resolver=lambda n, pp: True,
+    )
+    assert len(res) == 1
+    if monkeypatch is None:
+        mp.undo()
+    return res[0]["audience"]
+
+
+def test_audience_defaults_to_public_when_undeclared():
+    # The absent field must not read as "no warning needed" — a destination only
+    # loses the exposure warning by declaring an access-controlled audience.
+    assert _collect_audience(None) == "public"
+
+
+def test_audience_passes_through_declared_values():
+    assert _collect_audience("public") == "public"
+    assert _collect_audience("internal") == "internal"
+    # Case/whitespace tolerance, since a manifest is hand-written.
+    assert _collect_audience(" Internal ") == "internal"
+
+
+@pytest.mark.parametrize("bogus", ["private", "corp", "", "  ", "internal-only", 7, ["internal"]])
+def test_audience_falls_back_to_public_on_anything_unrecognized(bogus, caplog):
+    # Fail-safe direction: a typo shows a warning about a private destination,
+    # never the reverse (a public URL published with no acknowledgment).
+    with caplog.at_level("WARNING"):
+        assert _collect_audience(bogus) == "public"
+    assert "unknown audience" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "origin,source",
+    [
+        ("registry", "kirocrew-registry:some-app"),
+        ("local", "/home/u/some-app"),
+        ("clone", "https://github.com/o/r"),
+        ("", ""),
+        ("Builtin", "Builtin"),
+        ("builtin-ish", "builtin-ish"),
+    ],
+)
+def test_a_third_party_install_cannot_inherit_a_shipped_internal_declaration(
+    origin, source, caplog
+):
+    """Name-squat half: the installed entry must be builtin-owned.
+
+    Even when the SHIPPED definition for this name declares ``internal``, an
+    install this registration did not write must not inherit it — otherwise an
+    app occupying a shipped builtin's name gets its safeguard removed.
+    """
+    with caplog.at_level("WARNING"):
+        assert _collect_audience("internal", origin=origin, source=source) == "public"
+    assert "treating as 'public'" in caplog.text
+
+
+def test_a_forged_on_disk_declaration_is_ignored(caplog):
+    """Forgery half: the DECLARATION must come from the shipped definition.
+
+    The per-host ``app.json`` under the app registry dir is writable (``list_apps``
+    documents self-managed apps rewriting it), so a manifest that declares
+    ``internal`` while the shipped definition says otherwise resolves to
+    ``public``. This is the check that makes mutable metadata insufficient.
+    """
+    with caplog.at_level("WARNING"):
+        assert _collect_audience("internal", shipped="public") == "public"
+        assert _collect_audience("internal", shipped=None) == "public"
+    assert "shipped definition says" in caplog.text
+
+
+def test_both_halves_present_keeps_the_internal_declaration():
+    assert _collect_audience("internal", origin="builtin", source="builtin") == "internal"
+
+
+def test_a_builtin_that_ships_a_ui_bundle_still_counts_as_distribution():
+    """``origin`` alone is the WRONG metadata signal, and wrong in a silent direction.
+
+    Builtin re-registration sets ``origin = "local"`` for a builtin that ships a
+    UI bundle (``manager.register_builtin_apps``, ``has_ui_bundle``), so an
+    origin-only check would coerce the first distribution-shipped publish
+    destination with its own UI back to ``public`` — rejecting the one app the
+    restriction exists to admit, with only a log line to show for it.
+    """
+    assert _collect_audience("internal", origin="local", source="builtin") == "internal"
+
+
+def test_the_distribution_check_agrees_with_the_core_ownership_predicate():
+    """Anti-drift: ``_is_distribution_app`` re-derives ``_builtin_owns_install``.
+
+    That helper takes an ``InstalledApp`` while the collector sees a dict, so the
+    predicate is duplicated by necessity. This pins the two together across the
+    matrix that matters, so a change to the core's discriminator fails HERE
+    instead of silently widening (or closing) who may drop the exposure warning.
+    """
+    from kiro_crew.apps.manager import InstalledApp, _builtin_owns_install
+    from kiro_crew.apps.routes import _is_distribution_app
+
+    for origin, source in [
+        ("builtin", "builtin"),
+        ("local", "builtin"),  # builtin shipping a UI bundle
+        ("builtin", "/some/path"),  # legacy entry written by an older gateway
+        ("registry", "kirocrew-registry:app"),
+        ("local", "/home/u/app"),
+        ("", ""),
+    ]:
+        row = {"origin": origin, "source": source}
+        expected = _builtin_owns_install(InstalledApp(name="x", origin=origin, source=source))
+        assert _is_distribution_app(row) is expected, (origin, source)
+
+
+def test_shipped_audience_reads_the_definition_set_not_the_apps_dir(monkeypatch):
+    """``_shipped_audience`` must resolve through the in-package definitions.
+
+    Pinned directly (not only through the collector) because this is the function
+    whose SOURCE of truth is the security property: reading the writable per-host
+    manifest here would silently restore the forgeable path.
+    """
+    from kiro_crew.apps.routes import _shipped_audience
+
+    monkeypatch.setattr(
+        "kiro_crew.apps.routes.builtin_app_definitions",
+        lambda: [
+            {"name": "shipped-internal", "publishProvider": {"audience": "INTERNAL "}},
+            {"name": "shipped-plain", "publishProvider": {"id": "x"}},
+            {"name": "no-provider"},
+        ],
+    )
+    assert _shipped_audience("shipped-internal") == "internal"
+    assert _shipped_audience("shipped-plain") == "public"
+    assert _shipped_audience("no-provider") is None
+    assert _shipped_audience("not-shipped-at-all") is None
+
+
+def test_shipped_audience_fails_closed_when_discovery_raises(monkeypatch, caplog):
+    from kiro_crew.apps.routes import _shipped_audience
+
+    def boom():
+        raise OSError("definitions unreadable")
+
+    monkeypatch.setattr("kiro_crew.apps.routes.builtin_app_definitions", boom)
+    with caplog.at_level("WARNING"):
+        assert _shipped_audience("anything") is None
+    assert "could not read shipped builtin definitions" in caplog.text
+
+
+def test_the_distribution_restriction_does_not_touch_a_public_declaration():
+    # Only the non-default variant is restricted; nothing about `public` needs
+    # provenance, and rejecting it there would be noise.
+    assert _collect_audience("public", origin="registry", source="reg:app") == "public"
+    assert _collect_audience(None, origin="registry", source="reg:app") == "public"
+
+
+def test_manifest_round_trips_audience_and_omits_the_default():
+    m = AppManifest.from_dict(
+        {
+            "name": "internal-publish",
+            "version": "1.0.0",
+            "displayName": "Internal Publishing",
+            "description": "x",
+            "publishProvider": {**_PP, "audience": "internal"},
+        }
+    )
+    assert m.publishProvider.audience == "internal"
+    d = m.to_dict()
+    assert d["publishProvider"]["audience"] == "internal"
+    # A builtin app's declaration reaches collect_publish_providers through this
+    # dataclass, so a dropped field here would silently restore the warning.
+    assert AppManifest.from_dict(d).publishProvider.audience == "internal"
+
+    plain = AppManifest.from_dict(
+        {
+            "name": "deploy-web",
+            "version": "1.0.0",
+            "displayName": "Web Deploy",
+            "description": "x",
+            "publishProvider": _PP,
+        }
+    )
+    assert plain.publishProvider.audience == "public"
+    assert "audience" not in plain.to_dict()["publishProvider"]
 
 
 # --- filesystem configured-check -------------------------------------------
@@ -260,6 +483,10 @@ async def test_core_deploy_provider_always_present(tmp_path, monkeypatch):
     assert core[0]["id"] == "deploy-web-aws"
     assert core[0]["endpoint"] == "/api/deploy/deploy"
     assert core[0]["setupRoute"] == "/artifacts/deploy"
+    # The one genuinely world-readable destination: its exposure warning and
+    # blocking acknowledgment must not be reachable by an app manifest, so the
+    # core sets this itself rather than inheriting a default.
+    assert core[0]["audience"] == "public"
     # Unconfigured (no profiles registered)
     assert core[0]["configured"] is False
 

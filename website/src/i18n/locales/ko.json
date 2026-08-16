@@ -5600,9 +5600,11 @@
       "content_changed_since_preview_re_run_publish_to": "미리 보기 이후 콘텐츠가 변경되었습니다 — 현재 버전으로 확인하려면 게시를 다시 실행하세요.",
       "credential_security_findings_cannot_be_overridde": "자격 증명·보안 관련 발견 항목은 무시할 수 없습니다. 게시하기 전에 감지된 비밀 값을\n 아티팩트에서 제거하세요.",
       "done": "완료",
+      "internal_destination_note": "액세스가 제어된 대상입니다. 게시된 아티팩트는 공용 인터넷에서 접근할 수 없습니다.",
       "kb": "KB",
       "no_publish_providers_available_for_this_artifact": "이 아티팩트 종류에 사용할 수 있는 게시 제공자가 없습니다.",
       "override_publish_anyway": "무시하고 게시",
+      "public_exposure_warning": "게시된 링크가 있는 사람은 누구나 이 콘텐츠를 볼 수 있습니다. 인증 없이 공용 인터넷에서 제공됩니다.",
       "publish": "게시",
       "publish_failed": "게시에 실패했습니다",
       "published": "게시했습니다!",
@@ -5615,8 +5617,7 @@
       "size": "크기:",
       "ttl_time_to_live": "TTL (유효 기간)",
       "unexpected_response": "예기치 않은 응답",
-      "via": "경유",
-      "public_exposure_warning": "게시된 링크가 있는 사람은 누구나 이 콘텐츠를 볼 수 있습니다. 인증 없이 공용 인터넷에서 제공됩니다."
+      "via": "경유"
     },
     "pullRequestPanel": {
       "a_reviewer": "리뷰어",

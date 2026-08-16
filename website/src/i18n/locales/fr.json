@@ -5768,9 +5768,11 @@
       "content_changed_since_preview_re_run_publish_to": "Le contenu a changé depuis l’aperçu — relance la publication pour confirmer avec la version actuelle.",
       "credential_security_findings_cannot_be_overridde": "Les détections d'identifiants ou de sécurité ne peuvent pas être ignorées. Supprimez les secrets détectés de\n                votre artefact avant de publier.",
       "done": "Terminé",
+      "internal_destination_note": "Destination à accès contrôlé — l'artefact publié n'est pas accessible depuis l'internet public.",
       "kb": "KB",
       "no_publish_providers_available_for_this_artifact": "Aucun fournisseur de publication disponible pour ce type d'artefact.",
       "override_publish_anyway": "Ignorer et publier quand même",
+      "public_exposure_warning": "Toute personne disposant du lien publié peut voir ce contenu. Il est servi sur l'Internet public sans authentification.",
       "publish": "Publier",
       "publish_failed": "Échec de la publication",
       "published": "Publié !",
@@ -5785,8 +5787,7 @@
       "size": "Taille :",
       "ttl_time_to_live": "TTL (durée de vie)",
       "unexpected_response": "Réponse inattendue",
-      "via": "via",
-      "public_exposure_warning": "Toute personne disposant du lien publié peut voir ce contenu. Il est servi sur l'Internet public sans authentification."
+      "via": "via"
     },
     "pullRequestPanel": {
       "a_reviewer": "un relecteur",
