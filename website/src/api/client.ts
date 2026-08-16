@@ -47,6 +47,34 @@ function themeConsentSha(colorTheme?: string): string | null {
   return stored
 }
 
+/** One machine-readable ground for a sharing verdict.
+ *
+ *  `code` is stable and is what the UI translates. `detail` is verbatim data
+ *  from the server or the config (an env name, a capability path, a protocol
+ *  version) and is deliberately NOT translated.
+ */
+export type McpShareReason = {
+  code: string
+  detail: string
+}
+
+/** The gateway's advisory reading of whether a server's backend can be shared.
+ *
+ *  `strength` is the evidence tier, weakest first: `unknown`, `no_objection`,
+ *  `declared`, `disqualified`, `refuted`. Only `declared` sets `recommendShare`,
+ *  because finding nothing disqualifying is an absence of evidence rather than
+ *  evidence of absence.
+ *
+ *  The wire object also carries a separate stub recommendation, which is not
+ *  declared here: a TS type is structural, so the field costs a reader something
+ *  and buys nothing until a component actually renders it.
+ */
+export type McpShareRecommendation = {
+  strength: string
+  recommendShare: boolean
+  reasons: McpShareReason[]
+}
+
 export type McpManagedServer = {
   name: string
   stub: boolean            // effective: can_stub AND in_allowlist
@@ -56,6 +84,11 @@ export type McpManagedServer = {
   agents: string[]         // agent configs that declare this server
   transport: string        // "stdio" (stubbable) or "http" (no stdio pipe to interpose on)
   denylisted: boolean      // in UNPOOLABLE_SERVERS — can never be pooled
+  // Optional because the field is only as old as the shareability detector: a
+  // dashboard served from this build can be pointed at an older gateway (Make
+  // Live to an earlier worktree), and a row with no verdict must read as "not
+  // measured" rather than crash the table.
+  recommendation?: McpShareRecommendation
 }
 
 export const SEARCH_MIN_CHARS = 2  // backend session search threshold (must match kiro_crew.history.SEARCH_MIN_CHARS)
