@@ -917,13 +917,31 @@ class TestPathAndSecretResolution:
 
     def test_internal_secret_prefers_the_environment(self, monkeypatch):
         monkeypatch.setenv("KIROCREW_INTERNAL_SECRET", "env-secret")
-        monkeypatch.setattr(cron_script, "read_local_secret", lambda: "file-secret")
+        monkeypatch.setattr(cron_script, "read_local_secret", lambda port: "file-secret")
         assert _resolve_internal_secret() == "env-secret"
 
     def test_internal_secret_falls_back_to_the_local_secret_file(self, monkeypatch):
         monkeypatch.delenv("KIROCREW_INTERNAL_SECRET", raising=False)
-        monkeypatch.setattr(cron_script, "read_local_secret", lambda: "file-secret")
+        monkeypatch.setattr(cron_script, "read_local_secret", lambda port: "file-secret")
         assert _resolve_internal_secret() == "file-secret"
+
+    def test_internal_secret_names_the_gateway_it_authenticates_against(self, monkeypatch):
+        # The credential is only valid for the gateway it belongs to, so the port
+        # must be resolved and PASSED -- not left for the reader to infer, which
+        # would let a cron authenticate against a different instance than it dials.
+        monkeypatch.delenv("KIROCREW_INTERNAL_SECRET", raising=False)
+        seen = {}
+
+        def _fake_read(port):
+            seen["port"] = port
+            return "file-secret"
+
+        monkeypatch.setattr(cron_script, "read_local_secret", _fake_read)
+        monkeypatch.setattr(
+            cron_script, "resolve_client_port_ex", lambda _cli: (7811, True)
+        )
+        assert _resolve_internal_secret() == "file-secret"
+        assert seen["port"] == 7811
 
 
 # ── run_script_sandboxed ──

@@ -4,6 +4,34 @@ All notable changes to KiroCrew are documented in this file.
 
 ## [Unreleased]
 
+- **A second gateway on the same machine no longer breaks the first one's
+  internal API with a bare `Forbidden`.** The internal-API credential is
+  generated per gateway start and held in memory as the value the auth
+  middleware compares against, but it was published only to one shared
+  `<data-home>/.local_secret`, last-writer-wins. A second gateway starting in
+  the same data home -- launched by hand, started from another checkout that
+  inherits the default home, or a cutover overlapping its predecessor --
+  replaced that file while the first kept serving the port. The incumbent went
+  on comparing against its own in-memory value, so every internal caller then
+  sent the newcomer's credential to the incumbent and the entire internal
+  channel answered 403: `learn_add`, `spawn`, `session-keepalive`, artifact
+  writes and the task runner all at once, silently, until one of them
+  restarted. The credential is now published per listener as
+  `run/gateway-<port>.secret` and read for the port the client resolved, the
+  shared file is not overwritten while a sibling gateway is verifiably alive,
+  the startup marker prune no longer deletes a live sibling's marker, and a
+  denial records both credential fingerprints (a short hash prefix and length,
+  never the value) so a mismatch names its two sides. `learn_add` explains the
+  instance mix-up instead of printing `Forbidden`. The MCP tools, cron trigger,
+  screencast ingress and review driver all resolve the credential for the port
+  they dial; the `kirocrew token` / `logout` CLI paths still read the shared
+  file, so on a host running several gateways in one data home those can still
+  answer 403 until that conversion lands. That gap is wider on Windows and on hosts
+  without listener-lookup tooling: the liveness proof cannot report an owner there
+  and fails closed, so a newcomer does not detect a live sibling and still replaces
+  the shared file -- the per-port readers are unaffected, but the CLI paths see the
+  original behaviour on those platforms.
+
 - **A knowledge source that errored during ingestion is no longer re-synced on
   every sweep.** `KnowledgeIngestion` marks failure in the `sync_status`
   **column**, but `SyncScheduler.sync_all`'s skip predicate read only the

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from kiro_crew import model_registry
-from kiro_crew.config.loader import DASHBOARD_PORT, config_dir
+from kiro_crew.config.loader import config_dir
 from kiro_crew.cron import (
     CronJob,
     CronService,
@@ -41,6 +41,7 @@ from kiro_crew.mcp_core import _resolve_session_key
 from kiro_crew.mcp_shared import call_tool_with_logging, run_mcp_stdio_loop
 from kiro_crew.platform import current_context
 from kiro_crew.platform import redact_via_context as redact
+from kiro_crew.port_resolution import resolve_client_port_ex
 from kiro_crew.sandbox import _AGENT_DENIED_ENV_KEYS
 from kiro_crew.security import (
     _SENSITIVE_HOME_DIRS,
@@ -1770,7 +1771,11 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
 
     if name == "cron_trigger":
         jid = args["job_id"]
-        port = DASHBOARD_PORT
+        # Resolve through the instance-aware resolver, not DASHBOARD_PORT: that
+        # constant reads KIROCREW_PORT only, so on a --port auto gateway it is 5476 --
+        # a SIBLING. Since the credential is paired to the port dialed, the sibling
+        # would authenticate and the job would run in the wrong instance.
+        port, _evidence_backed = resolve_client_port_ex(None)
         secret_path = config_dir() / ".local_secret"
         ok, msg = trigger_cron_job(jid, port, secret_path)
         sel().log_api_access(

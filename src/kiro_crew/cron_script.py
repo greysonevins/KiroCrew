@@ -39,6 +39,7 @@ from kiro_crew import platform_compat
 from kiro_crew.config.loader import config_dir, read_local_secret
 from kiro_crew.config.paths import kiro_agents_dir
 from kiro_crew.loopback_http import loopback_urlopen
+from kiro_crew.port_resolution import resolve_client_port_ex
 from kiro_crew.sandbox import (
     _AGENT_DENIED_ENV_KEYS,
     SandboxUnavailableError,
@@ -247,7 +248,14 @@ class ScriptContext:
     _secret: str = ""
 
     def __post_init__(self) -> None:
-        self._port = int(os.environ.get("KIROCREW_PORT", "5476"))
+        # The parent injects the port it minted the credential for. Preferring it
+        # keeps credential and dial target from one resolution; KIROCREW_PORT is the
+        # fallback for a directly-constructed context and is 5476 on a --port auto
+        # gateway, which is a SIBLING rather than this instance.
+        self._port = int(
+            os.environ.pop("_KIROCREW_DIAL_PORT", "")
+            or os.environ.get("KIROCREW_PORT", "5476")
+        )
         # Secret injected via temp file (not inherited env) to prevent privilege escalation.
         # Pop env var and unlink file immediately so fn(ctx) cannot access the secret directly.
         secret_file = os.environ.pop("_KIROCREW_SECRET_FILE", "")
@@ -551,14 +559,36 @@ def resolve_script_path(script_path: str) -> tuple[str, str]:
 def _resolve_internal_secret() -> str:
     """Internal secret for ScriptContext HTTP calls (e.g. notify -> /api/send-message).
 
-    The gateway generates its secret at startup and writes it to
-    ``config_dir()/.local_secret``; the ``KIROCREW_INTERNAL_SECRET`` env var is
-    normally unset, so fall back to the file via the shared
-    ``config.loader.read_local_secret`` helper (single home for that read).
-    Without this the sandbox sends an empty ``X-Internal-Secret`` and every
-    code-cron notify gets HTTP 403.
+    The gateway generates its secret at startup and publishes it per listener as
+    ``run/gateway-<port>.secret`` (with ``config_dir()/.local_secret`` as the
+    home-wide fallback); the ``KIROCREW_INTERNAL_SECRET`` env var is normally unset,
+    so fall back to the file via the shared ``config.loader.read_local_secret``
+    helper (single home for that read). Without this the sandbox sends an empty
+    ``X-Internal-Secret`` and every code-cron notify gets HTTP 403.
+
+    The port is resolved HERE rather than inside the helper: a credential is only
+    valid for the gateway it belongs to, so the dial target is the caller's
+    decision and is written where a reviewer can see which gateway this cron
+    authenticates against.
     """
-    return os.environ.get("KIROCREW_INTERNAL_SECRET", "") or read_local_secret()
+    env_secret = os.environ.get("KIROCREW_INTERNAL_SECRET", "")
+    if env_secret:
+        return env_secret
+    return read_local_secret(_resolve_dial_port())
+
+
+def _resolve_dial_port() -> int:
+    """The ONE port this cron dials, used for both the credential and the child.
+
+    The parent mints the credential and the child sends it, so a second independent
+    resolution in the child is exactly how the two diverge: ``ScriptContext`` reads
+    ``KIROCREW_PORT``, which is 5476 on a ``--port auto`` gateway, while the parent
+    would have minted for the real ephemeral port -- credential for one gateway,
+    request to another. One resolution, injected as ``_KIROCREW_DIAL_PORT``, makes
+    that mismatch unrepresentable.
+    """
+    port, _evidence_backed = resolve_client_port_ex(None)
+    return port
 
 
 def run_script_sandboxed(
@@ -639,6 +669,8 @@ def run_script_sandboxed(
         # are never inherited; the internal secret is passed via the 0600 file.
         clean_env = _clean_cron_env()
         clean_env["_KIROCREW_SECRET_FILE"] = secret_path
+        # The child must dial the gateway the credential above was minted for.
+        clean_env["_KIROCREW_DIAL_PORT"] = str(_resolve_dial_port())
 
         sandboxed_argv = cgroup_scope_argv(sandboxed_argv)  # cgroup DoS ceiling
         proc = popen_limited(
