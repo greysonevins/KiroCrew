@@ -6557,7 +6557,8 @@
       "subagents": "Subagenten",
       "summary": "Zusammenfassung",
       "workflows": "Workflows",
-      "git": "Git"
+      "git": "Git",
+      "pins": "Angeheftet"
     },
     "useSceneInteraction": {
       "all_slots_are_occupied": "Alle Slots sind belegt",
@@ -7653,7 +7654,9 @@
         "this_app_render_is_no_longer_available": "Diese App-Darstellung ist nicht mehr verfügbar. Führen Sie das Tool erneut aus, um sie anzuzeigen.",
         "turn_diff": "Zug-Diff",
         "menu_git": "Git",
-        "menu_git_desc": "Branch, Änderungen und letzte Commits"
+        "menu_git_desc": "Branch, Änderungen und letzte Commits",
+        "menu_pins": "Angeheftet",
+        "menu_pins_desc": "Nachrichten, die du in dieser Sitzung angeheftet hast"
       },
       "stopEventCard": {
         "stop_failed_session_reset": "Stoppen fehlgeschlagen, Sitzung zurückgesetzt",
@@ -7772,9 +7775,8 @@
       },
       "pins": {
         "pinned_messages": "Angeheftete Nachrichten",
-        "close_panel": "Panel für angeheftete Nachrichten schließen",
         "loading": "Wird geladen…",
-        "no_pinned_messages": "Noch keine angehefteten Nachrichten. Hefte wichtige Nachrichten an, um sie schnell wiederzufinden.",
+        "no_pinned_messages": "Noch keine angehefteten Nachrichten. Zeige auf eine Nachricht im Chat und klicke auf das Stecknadel-Symbol, um sie hier zu speichern.",
         "message_unavailable": "Diese angeheftete Nachricht ist im geladenen Verlauf nicht mehr verfügbar.",
         "pin_failed": "Die Nachricht konnte nicht angeheftet werden. Versuche es erneut.",
         "unpin_failed": "Die Nachricht konnte nicht gelöst werden. Versuche es erneut.",
@@ -7787,7 +7789,6 @@
         "copy_preview": "Text kopieren",
         "copy_link": "Link zur Nachricht kopieren",
         "unpin": "Loslösen",
-        "open_pinned_messages": "Angeheftete Nachrichten öffnen",
         "jump_to_message": "Zur Nachricht springen"
       },
       "sessionSummary": {

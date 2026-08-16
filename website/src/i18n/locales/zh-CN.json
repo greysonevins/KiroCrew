@@ -6469,7 +6469,8 @@
       "subagents": "子代理",
       "summary": "摘要",
       "workflows": "工作流",
-      "git": "Git"
+      "git": "Git",
+      "pins": "置顶"
     },
     "useSceneInteraction": {
       "all_slots_are_occupied": "所有槽位都已占用",
@@ -7551,7 +7552,9 @@
         "this_app_render_is_no_longer_available": "此应用渲染已不可用。请重新运行工具以查看。",
         "turn_diff": "本轮差异",
         "menu_git": "Git",
-        "menu_git_desc": "分支、更改和最近的提交"
+        "menu_git_desc": "分支、更改和最近的提交",
+        "menu_pins": "置顶",
+        "menu_pins_desc": "你在这个会话里标记的消息"
       },
       "stopEventCard": {
         "stop_failed_session_reset": "停止失败，会话已重置",
@@ -7670,9 +7673,8 @@
       },
       "pins": {
         "pinned_messages": "已置顶消息",
-        "close_panel": "关闭置顶消息面板",
         "loading": "加载中…",
-        "no_pinned_messages": "暂无置顶消息。置顶重要消息以便快速查找。",
+        "no_pinned_messages": "还没有置顶消息。把鼠标移到聊天中的某条消息上，点击图钉图标即可保存到这里。",
         "message_unavailable": "此置顶消息在已加载的历史记录中不再可用。",
         "pin_failed": "无法置顶消息，请重试。",
         "unpin_failed": "无法取消置顶消息，请重试。",
@@ -7685,7 +7687,6 @@
         "copy_preview": "复制文本",
         "copy_link": "复制消息链接",
         "unpin": "取消置顶",
-        "open_pinned_messages": "打开置顶消息",
         "jump_to_message": "跳转到消息"
       },
       "sessionSummary": {

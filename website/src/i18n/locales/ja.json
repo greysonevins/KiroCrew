@@ -6469,7 +6469,8 @@
       "subagents": "サブエージェント",
       "summary": "サマリー",
       "workflows": "ワークフロー",
-      "git": "Git"
+      "git": "Git",
+      "pins": "ピン"
     },
     "useSceneInteraction": {
       "all_slots_are_occupied": "すべてのスロットが使用中です",
@@ -7551,7 +7552,9 @@
         "this_app_render_is_no_longer_available": "このアプリの表示は利用できなくなりました。もう一度ツールを実行して表示してください。",
         "turn_diff": "ターンの差分",
         "menu_git": "Git",
-        "menu_git_desc": "ブランチ、変更、最近のコミット"
+        "menu_git_desc": "ブランチ、変更、最近のコミット",
+        "menu_pins": "ピン",
+        "menu_pins_desc": "このセッションでピン留めしたメッセージ"
       },
       "stopEventCard": {
         "stop_failed_session_reset": "停止に失敗したため、セッションをリセットしました",
@@ -7670,9 +7673,8 @@
       },
       "pins": {
         "pinned_messages": "ピン留めされたメッセージ",
-        "close_panel": "ピン留めメッセージパネルを閉じる",
         "loading": "読み込み中…",
-        "no_pinned_messages": "ピン留めされたメッセージはまだありません。重要なメッセージをピン留めしてすぐに見つけられるようにしましょう。",
+        "no_pinned_messages": "ピン留めされたメッセージはまだありません。チャットのメッセージにカーソルを合わせ、ピンのアイコンをクリックするとここに保存されます。",
         "message_unavailable": "このピン留めメッセージは読み込まれた履歴では利用できなくなりました。",
         "pin_failed": "メッセージをピン留めできませんでした。もう一度お試しください。",
         "unpin_failed": "メッセージのピン留めを解除できませんでした。もう一度お試しください。",
@@ -7685,7 +7687,6 @@
         "copy_preview": "テキストをコピー",
         "copy_link": "メッセージへのリンクをコピー",
         "unpin": "ピン留めを解除",
-        "open_pinned_messages": "ピン留めされたメッセージを開く",
         "jump_to_message": "メッセージに移動"
       },
       "sessionSummary": {

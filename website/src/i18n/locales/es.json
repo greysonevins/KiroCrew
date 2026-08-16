@@ -6645,7 +6645,8 @@
       "subagents": "Subagentes",
       "summary": "Resumen",
       "workflows": "Flujos de trabajo",
-      "git": "Git"
+      "git": "Git",
+      "pins": "Fijados"
     },
     "useSceneInteraction": {
       "all_slots_are_occupied": "Todos los slots están ocupados",
@@ -7755,7 +7756,9 @@
         "this_app_render_is_no_longer_available": "Esta representación de la app ya no está disponible. Ejecuta la herramienta de nuevo para verla.",
         "turn_diff": "Diff del turno",
         "menu_git": "Git",
-        "menu_git_desc": "Rama, cambios y commits recientes"
+        "menu_git_desc": "Rama, cambios y commits recientes",
+        "menu_pins": "Fijados",
+        "menu_pins_desc": "Mensajes que fijaste en esta sesión"
       },
       "stopEventCard": {
         "stop_failed_session_reset": "No se pudo detener, sesión restablecida",
@@ -7874,9 +7877,8 @@
       },
       "pins": {
         "pinned_messages": "Mensajes fijados",
-        "close_panel": "Cerrar panel de mensajes fijados",
         "loading": "Cargando…",
-        "no_pinned_messages": "Aún no hay mensajes fijados. Fija mensajes importantes del chat para encontrarlos rápidamente.",
+        "no_pinned_messages": "Aún no hay mensajes fijados. Coloca el cursor sobre un mensaje del chat y haz clic en el icono de chincheta para guardarlo aquí.",
         "message_unavailable": "Este mensaje fijado ya no está disponible en el historial cargado.",
         "pin_failed": "No se pudo fijar el mensaje. Inténtalo de nuevo.",
         "unpin_failed": "No se pudo desfijar el mensaje. Inténtalo de nuevo.",
@@ -7889,7 +7891,6 @@
         "copy_preview": "Copiar texto",
         "copy_link": "Copiar enlace al mensaje",
         "unpin": "Desfijar",
-        "open_pinned_messages": "Abrir mensajes fijados",
         "jump_to_message": "Ir al mensaje"
       },
       "sessionSummary": {

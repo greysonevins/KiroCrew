@@ -6645,7 +6645,8 @@
       "subagents": "Sous-agents",
       "summary": "Résumé",
       "workflows": "Workflows",
-      "git": "Git"
+      "git": "Git",
+      "pins": "Épinglés"
     },
     "useSceneInteraction": {
       "all_slots_are_occupied": "Tous les emplacements sont occupés",
@@ -7755,7 +7756,9 @@
         "this_app_render_is_no_longer_available": "Ce rendu d'application n'est plus disponible. Exécutez à nouveau l'outil pour l'afficher.",
         "turn_diff": "Diff du tour",
         "menu_git": "Git",
-        "menu_git_desc": "Branche, modifications et commits récents"
+        "menu_git_desc": "Branche, modifications et commits récents",
+        "menu_pins": "Épinglés",
+        "menu_pins_desc": "Messages que vous avez épinglés dans cette session"
       },
       "stopEventCard": {
         "stop_failed_session_reset": "Échec de l'arrêt, session réinitialisée",
@@ -7874,9 +7877,8 @@
       },
       "pins": {
         "pinned_messages": "Messages épinglés",
-        "close_panel": "Fermer le panneau des messages épinglés",
         "loading": "Chargement…",
-        "no_pinned_messages": "Aucun message épinglé. Épinglez des messages importants pour les retrouver rapidement.",
+        "no_pinned_messages": "Aucun message épinglé. Survolez un message dans la conversation et cliquez sur l’icône d’épingle pour l’enregistrer ici.",
         "message_unavailable": "Ce message épinglé n’est plus disponible dans l’historique chargé.",
         "pin_failed": "Impossible d’épingler le message. Réessayez.",
         "unpin_failed": "Impossible de désépingler le message. Réessayez.",
@@ -7889,7 +7891,6 @@
         "copy_preview": "Copier le texte",
         "copy_link": "Copier le lien vers le message",
         "unpin": "Désépingler",
-        "open_pinned_messages": "Ouvrir les messages épinglés",
         "jump_to_message": "Aller au message"
       },
       "sessionSummary": {

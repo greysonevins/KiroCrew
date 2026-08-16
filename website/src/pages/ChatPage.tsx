@@ -125,7 +125,6 @@ import MessageErrorBoundary from '../components/MessageErrorBoundary'
 import TypewriterText from '../components/TypewriterText'
 import { useChatNavigation } from '../hooks/useChatNavigation'
 import { useChatPins } from '../hooks/useChatPins'
-import { PinnedMessagesPanel } from './chat/PinnedMessagesPanel'
 import SubagentProgressBar from './chat/SubagentProgressBar'
 import TaskProgressBar from './chat/TaskProgressBar'
 import SidePanel, { CHAT_PANE_MIN_W, sidePanelFillWidth } from './chat/SidePanel'
@@ -168,7 +167,7 @@ import { focusComposerAfter } from './chat/composerFocus'
 import { useHoverIntent } from '../hooks/useHoverIntent'
 import { useKnowledgeFetch, extractKnowledgeQuery, expandKnowledgeBlock } from './chat/useKnowledgeFetch'
 import { KnowledgePicker } from './chat/KnowledgePicker'
-import { BookOpen, EyeOff, Loader, Pen, ChevronDown, ChevronRight, Plug, ArrowDown, MessageSquare, MessageSquareDot, Sparkles, VenetianMask, Clock, Undo2, Columns2, ExternalLink, Paperclip, Folder, Pin, X } from 'lucide-react'
+import { BookOpen, EyeOff, Loader, Pen, ChevronDown, ChevronRight, Plug, ArrowDown, MessageSquare, MessageSquareDot, Sparkles, VenetianMask, Clock, Undo2, Columns2, ExternalLink, Paperclip, Folder, X } from 'lucide-react'
 import { PanelLeftSolid, PanelLeftLight, PanelRightSolid } from '../components/icons/panels'
 
 import InfoTip from '../components/InfoTip'
@@ -5385,7 +5384,6 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     unpinMessage,
     unpinById,
   } = useChatPins(activeSlot ?? undefined)
-  const [pinsPanelOpen, setPinsPanelOpen] = useState(false)
   const [pinNotice, setPinNotice] = useState<string | null>(null)
   const [pendingPinnedJump, setPendingPinnedJump] = useState<{
     slotKey: string
@@ -5393,7 +5391,6 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     mid?: string
   } | null>(null)
   const pinnedJumpPageLoadsRef = useRef(0)
-  const togglePinsPanel = useCallback(() => setPinsPanelOpen(p => !p), [])
   const jumpToLoadedPinnedMessage = useCallback((messageTs: string, mid?: string): boolean => {
     // Prefer mid-based resolution (unique identity); fall back to ts for legacy pins.
     let msgIdx = -1
@@ -5468,11 +5465,34 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     slotOldestIndex,
   ])
   const handleTogglePinForMessage = useCallback((mid: string, messageTs: string, role: 'user' | 'assistant', content: string) => {
-    const action = isPinned(mid)
-      ? unpinMessage(mid)
-      : pinMessage({ mid, message_ts: messageTs, role, preview: content })
-    void action.catch(() => {}) // useChatPins exposes the localized error state.
-  }, [isPinned, pinMessage, unpinMessage])
+    if (isPinned(mid)) {
+      void unpinMessage(mid).catch(() => {}) // useChatPins exposes the localized error state.
+      return
+    }
+    // A session's FIRST pin opens the Pins tab, so the pin has a visible
+    // destination -- the same shape as the Issues reveal, and for the same
+    // reason: Pins is an on-demand view, so nothing would surface it otherwise.
+    // A session pinned earlier reaches it through the + menu (Issues' zero
+    // option for pre-existing links), which is what keeps this free of a
+    // persisted reveal claim.
+    // Read before the mutation so the optimistic insert has not landed yet.
+    const isFirstPin = chatPins.length === 0
+    void pinMessage({ mid, message_ts: messageTs, role, preview: content }).catch(() => {})
+    if (isFirstPin && activeSlot) {
+      // Addressed by slot, not through tabsCtl, for the same reason as the
+      // source-reveal path: that binding can be a chat being left.
+      openPanelView(activeSlot, 'pins')
+      // Pinning is NOT a navigation request, so it must not cost the user state
+      // they are mid-way through. Unlike the source-reveal path this does not
+      // close the find pane: someone who searched the transcript to FIND the
+      // message they are pinning would lose the pane and its results on the very
+      // click that acts on a result. Below the mobile breakpoint the panel opens
+      // full width, so opening it would navigate them off the chat entirely.
+      // The tab is still created above -- it is revealed quietly instead.
+      if (!search.isOpen && !isMobile) dispatch(openActivityPanel())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- search re-identifies on every keystroke; only its isOpen flag is read
+  }, [activeSlot, chatPins.length, dispatch, isMobile, isPinned, pinMessage, search.isOpen, unpinMessage])
   const handleUnpinById = useCallback((id: string) => {
     void unpinById(id).catch(() => {})
   }, [unpinById])
@@ -6314,16 +6334,6 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
                   the button does nothing. */}
               {!embedMode && !popout && !activityOpen && (
                 <Clickable
-                  className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors bg-transparent border-none shrink-0 pointer-events-auto cursor-pointer ${pinsPanelOpen ? 'text-accent bg-accent/10' : 'text-muted hover:text-text hover:bg-bg-hover'}`}
-                  onClick={togglePinsPanel}
-                  title={i18nT('pages.chat.pins.open_pinned_messages')}
-                  aria-label={i18nT('pages.chat.pins.open_pinned_messages')}
-                >
-                  <Pin size={15} />
-                </Clickable>
-              )}
-              {!embedMode && !popout && !activityOpen && (
-                <Clickable
                   className="pi-morph flex items-center justify-center w-7 h-7 rounded-md transition-colors bg-transparent border-none shrink-0 pointer-events-auto text-muted hover:text-text hover:bg-bg-hover cursor-pointer"
                   onClick={toggleAct}
                   title={i18nT('pages.chatPage.open_activity_panel')}
@@ -7011,31 +7021,6 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
         )}
       </div>
       )}
-      <AnimatePresence initial={false}>
-        {pinsPanelOpen && (
-          <motion.div
-            key="pins-panel"
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 300, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
-            className="h-full overflow-hidden shrink-0 border-l border-border shadow-lg"
-          >
-            <div className="w-[300px] h-full">
-              <PinnedMessagesPanel
-                pins={chatPins}
-                loading={chatPinsLoading}
-                slotKey={activeSlot || ''}
-                slotTitle={activeSlotTitle}
-                mode={mode}
-                onClose={() => setPinsPanelOpen(false)}
-                onJumpToMessage={handleJumpToPinnedMessage}
-                onUnpin={handleUnpinById}
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
       {search.isOpen && (
           <DetailPanel
             key="search-panel"
@@ -7086,6 +7071,8 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
               issues={panelIssues} selectedIssueUrl={selectedIssueUrl} onSelectIssue={selectIssueUrl} onReconcileIssue={reconcileIssueUrl}
               onAddSourceToChat={addSourceCommentToChat}
               onSubmitComments={submitComments} onFileSave={handleFileSave} onClose={toggleAct}
+              pins={chatPins} pinsLoading={chatPinsLoading} onJumpToPin={handleJumpToPinnedMessage} onUnpin={handleUnpinById}
+              slotTitle={activeSlotTitle} chatMode={mode}
               inlinePreviewPath={inlinePreviewPath} onInlinePreviewChange={setInlinePreviewPath}
               expanded={panelMaximized}
               fillWidth={panelFillWidth}
@@ -7123,6 +7110,8 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
               issues={panelIssues} selectedIssueUrl={selectedIssueUrl} onSelectIssue={selectIssueUrl} onReconcileIssue={reconcileIssueUrl}
               onAddSourceToChat={addSourceCommentToChat}
                 onSubmitComments={submitComments} onFileSave={handleFileSave} onClose={toggleAct}
+                pins={chatPins} pinsLoading={chatPinsLoading} onJumpToPin={handleJumpToPinnedMessage} onUnpin={handleUnpinById}
+                slotTitle={activeSlotTitle} chatMode={mode}
                 inlinePreviewPath={inlinePreviewPath} onInlinePreviewChange={setInlinePreviewPath}
                 expanded={panelMaximized}
                 fillWidth={panelFillWidth}

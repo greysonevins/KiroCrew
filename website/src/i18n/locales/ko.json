@@ -6469,7 +6469,8 @@
       "subagents": "서브에이전트",
       "summary": "요약",
       "workflows": "워크플로",
-      "git": "Git"
+      "git": "Git",
+      "pins": "핀"
     },
     "useSceneInteraction": {
       "all_slots_are_occupied": "모든 슬롯이 사용 중입니다",
@@ -7551,7 +7552,9 @@
         "this_app_render_is_no_longer_available": "이 앱 렌더링은 더 이상 사용할 수 없습니다. 도구를 다시 실행해 확인하세요.",
         "turn_diff": "턴 차이",
         "menu_git": "Git",
-        "menu_git_desc": "브랜치·변경 사항·최근 커밋"
+        "menu_git_desc": "브랜치·변경 사항·최근 커밋",
+        "menu_pins": "핀",
+        "menu_pins_desc": "이 세션에서 핀으로 표시한 메시지"
       },
       "stopEventCard": {
         "stop_failed_session_reset": "중지에 실패하여 세션을 초기화했습니다",
@@ -7670,9 +7673,8 @@
       },
       "pins": {
         "pinned_messages": "Pinned messages",
-        "close_panel": "Close pinned messages panel",
         "loading": "Loading pins…",
-        "no_pinned_messages": "No pinned messages yet. Pin important messages from the chat to find them quickly.",
+        "no_pinned_messages": "고정된 메시지가 없습니다. 채팅에서 메시지에 커서를 올린 뒤 핀 아이콘을 클릭하면 여기에 저장됩니다.",
         "message_unavailable": "This pinned message is no longer available in the loaded history.",
         "pin_failed": "Could not pin the message. Try again.",
         "unpin_failed": "Could not unpin the message. Try again.",
@@ -7685,7 +7687,6 @@
         "copy_preview": "Copy text",
         "copy_link": "Copy link to message",
         "unpin": "Unpin",
-        "open_pinned_messages": "Open pinned messages",
         "jump_to_message": "Jump to message"
       },
       "sessionSummary": {
