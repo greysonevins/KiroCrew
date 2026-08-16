@@ -431,6 +431,34 @@ def parse_text_chunk(update: dict[str, Any]) -> tuple[str | None, bool]:
 _ACP_SHELL_KIND = "execute"
 
 
+def reject_option_id(params: dict) -> str | None:
+    """The least-destructive reject optionId a permission request advertises.
+
+    Used when auto-answering a ``session/request_permission`` for a session
+    this client never registered (a backend-internal subagent). Prefer the
+    request's own ``reject_once``-kind option; fall back to a legacy id that
+    names reject. ``None`` means the caller must answer with the ``cancelled``
+    outcome instead — kiro-cli maps that to cancelling the child's turn, which
+    is strictly worse than a per-tool reject, so this is the last resort.
+    """
+    raw = params.get("options")
+    if not isinstance(raw, list):
+        return None
+    options = [o for o in raw if isinstance(o, dict)]
+    for want_kind in ("reject_once", "reject_always"):
+        for opt in options:
+            opt_id = opt.get("optionId") or opt.get("id")
+            if opt.get("kind") == want_kind and isinstance(opt_id, str) and opt_id:
+                return opt_id
+    # Legacy kiro payloads omit `kind` — match well-known reject ids only, so
+    # an allow option can never be picked by accident.
+    for opt in options:
+        opt_id = opt.get("optionId") or opt.get("id")
+        if isinstance(opt_id, str) and opt_id in ("reject_once", "reject_always", "reject"):
+            return opt_id
+    return None
+
+
 def is_shell_kind(kind: str | None) -> bool:
     """True when an ACP tool_kind denotes a shell/exec command."""
     return kind == _ACP_SHELL_KIND
@@ -588,8 +616,16 @@ def build_permission_event(
     # shared path. Primary source: the raw dict the preceding tool_call cached by
     # toolCallId; fallback: an inline dict on the permission frame itself.
     _resolved_raw_params: dict | None = None
+    _raw_params_trusted = False
     if tool_call_id and raw_params_cache is not None:
-        _resolved_raw_params = raw_params_cache.pop(tool_call_id, None)
+        # .get() (not .pop()), matching the sibling shell/MCP/tool-name caches:
+        # a second permission frame for the same toolCallId (re-ask after
+        # reject_once, re-prompt after a mode change) must still find the
+        # params — popping made provenance single-use and downgraded the
+        # repeat frame to low fidelity. The per-turn dispatch .clear()
+        # handles cleanup.
+        _resolved_raw_params = raw_params_cache.get(tool_call_id)
+        _raw_params_trusted = _resolved_raw_params is not None
     if _resolved_raw_params is None:
         _inline = tool_call.get("input") or tool_call.get("params")
         if isinstance(_inline, dict):
@@ -600,6 +636,8 @@ def build_permission_event(
         request_id=request_id,
         title=title,
         tool_kind=tool_kind,
+        raw_params_trusted=_raw_params_trusted,
+        shell_classified=cached_shell is not None,
         options=options,
         tool_input=tool_input,
         tool_call_id=tool_call_id,
@@ -650,8 +688,14 @@ def _build_tool_call_event(
         raw_params_cache[tool_call_id] = raw_input
     # Capture the shell signal from the RAW kind (before redaction) so a later
     # permission_request (which carries no kind) can inherit it via shell_cache.
+    # Cache ONLY when the update actually carried a usable kind: a missing kind
+    # defaults to "unknown"/non-shell for THIS event's display, but caching that
+    # False would let the later permission event read it as a RESOLVED non-shell
+    # classification (shell_classified) and skip the low-fidelity downgrade
+    # without any classification having actually happened.
+    _kind_resolved = isinstance(update.get("kind"), str) and bool(update.get("kind"))
     is_shell = is_shell_kind(kind)
-    if tool_call_id and shell_cache is not None:
+    if tool_call_id and shell_cache is not None and _kind_resolved:
         shell_cache[tool_call_id] = is_shell
     # Capture the TRUSTED MCP server identity (_meta.kiro.mcpServerName) so the
     # later permission_request — the dashboard's gate path, which carries no
@@ -934,6 +978,7 @@ def _build_tool_refinement_event(
     update: dict[str, Any],
     tool_input_cache: dict[str, str] | None,
     shell_cache: dict[str, bool] | None = None,
+    raw_params_cache: dict[str, dict] | None = None,
 ) -> AcpEvent | None:
     """Build an ``EVENT_TOOL_CALL_UPDATE`` (refined title/kind/input) for a tool.
 
@@ -977,6 +1022,13 @@ def _build_tool_refinement_event(
         input_str = _redact(input_str)
         if tool_input_cache is not None:
             tool_input_cache[tool_use_id] = input_str
+    # The refinement's rawInput is the COMPLETE params object — cache it for
+    # the permission event's structured-params (path/arg scope) checks, same
+    # as the initial tool_call does. Without this, a backend whose initial
+    # tool_call streams empty rawInput leaves raw_params_cache forever empty
+    # and every child permission request downgrades to low fidelity.
+    if raw_params_cache is not None and isinstance(raw_input, dict) and raw_input:
+        raw_params_cache[tool_use_id] = raw_input
     title_source = select_tool_title(title, raw_input)
     title_str = _redact(title_source) if title_source else ""
     kind_str = _redact(kind) if isinstance(kind, str) and kind else ""
@@ -1061,7 +1113,9 @@ def parse_session_update(
         result = _build_tool_result_event(update)
         if result is not None:
             events.append(result)
-        refine = _build_tool_refinement_event(update, tool_input_cache, shell_cache)
+        refine = _build_tool_refinement_event(
+            update, tool_input_cache, shell_cache, raw_params_cache
+        )
         if refine is not None:
             events.append(refine)
         # A todo_list result carries the agent's whole task list. Emit it as an

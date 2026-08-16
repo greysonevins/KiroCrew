@@ -4613,7 +4613,13 @@ def test_build_permission_event_sets_raw_tool_params():
     )
     event, _recorded = build_permission_event(msg, raw_params_cache=raw_cache)
     assert event.raw_tool_params == {"path": "/home/u/.ssh/id_rsa", "content": "x"}
-    assert "tc-1" not in raw_cache  # consumed on use
+    # RETAINED on use (.get, matching the sibling caches): a second permission
+    # frame for the same toolCallId (re-ask after reject_once, re-prompt after
+    # a mode change) must still find the params — the per-turn dispatch
+    # .clear() handles cleanup.
+    assert "tc-1" in raw_cache
+    event2, _ = build_permission_event(msg, raw_params_cache=raw_cache)
+    assert event2.raw_params_trusted is True
 
 
 def test_build_permission_event_raw_params_none_without_cache():
@@ -5751,6 +5757,10 @@ async def test_known_subagent_permission_routes_to_slot_queue():
     being auto-rejected."""
     rt, reader, proc = _make_runtime()
     queues = _register(rt, "parent-session")
+    # An explicitly marked active turn — requests are only routed while the
+    # owner's prompt dispatch loop is consuming the queue. (_routed_requests
+    # is NOT a proxy for this: it also holds set_mode/steer/config ids.)
+    rt.mark_turn_active("parent-session", True)
     task = await _start_reader(rt)
     try:
         _feed(
@@ -5992,9 +6002,9 @@ async def test_session_swap_on_warm_runtime_does_not_inherit_child_routing():
 
 
 def test_child_low_fidelity_requires_structured_security_context():
-    """Pins the fidelity predicate GPT round-6 hardened: a rendered-diff
-    tool_input alone is NOT fidelity; structured params (and a recoverable
-    command for shells) are."""
+    """A rendered-diff tool_input alone is NOT fidelity: the child gate
+    requires cache-provenance structured params, a resolved shell
+    classification, and (for shells) a recoverable command."""
     from kiro_crew.acp.types import AcpEvent
 
     # Child edit refinement: diff text cached, no structured params → LOW.
@@ -6004,14 +6014,367 @@ def test_child_low_fidelity_requires_structured_security_context():
     ev = AcpEvent(
         kind="permission_request", sub_session_id="child-a",
         is_shell=True, raw_tool_params={"note": "no command key"},
+        raw_params_trusted=True, shell_classified=True,
     )
     assert ev.child_low_fidelity is True
-    # Child with full context → parity (not low).
+    # Inline (agent-authored) params without cache provenance → LOW even
+    # with a recoverable command.
     ev = AcpEvent(
         kind="permission_request", sub_session_id="child-a",
         is_shell=True, raw_tool_params={"command": "sha256sum README.md"},
+        raw_params_trusted=False, shell_classified=True,
+    )
+    assert ev.child_low_fidelity is True
+    # Unresolved shell classification (cache miss defaults is_shell=False) → LOW.
+    ev = AcpEvent(
+        kind="permission_request", sub_session_id="child-a",
+        raw_tool_params={"path": "/tmp/x"},
+        raw_params_trusted=True, shell_classified=False,
+    )
+    assert ev.child_low_fidelity is True
+    # Child with full provenance context → parity (not low).
+    ev = AcpEvent(
+        kind="permission_request", sub_session_id="child-a",
+        is_shell=True, raw_tool_params={"command": "sha256sum README.md"},
+        raw_params_trusted=True, shell_classified=True,
     )
     assert ev.child_low_fidelity is False
     # Non-child events are never low-fidelity.
     ev = AcpEvent(kind="permission_request")
     assert ev.child_low_fidelity is False
+
+
+@pytest.mark.asyncio
+async def test_between_turns_child_permission_is_answered_not_queued():
+    """With no in-flight prompt nothing consumes the slot queue until the next
+    turn's drain — a queued request would strand the backend. It is answered
+    fail-closed immediately instead."""
+    rt, reader, proc = _make_runtime()
+    queues = _register(rt, "parent-session")
+    task = await _start_reader(rt)
+    try:
+        _feed(
+            reader,
+            {
+                "method": "_kiro.dev/subagent/list_update",
+                "params": {"subagents": [{"sessionId": "child-a"}]},
+            },
+        )
+        _feed(
+            reader,
+            {
+                "jsonrpc": "2.0",
+                "id": 96,
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": "child-a",
+                    "options": [
+                        {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"}
+                    ],
+                },
+            },
+        )
+        await _drain(reader)
+        await _drain_audits(rt)
+
+        frame = _last_written_frame(proc)
+        assert frame["id"] == 96
+        assert frame["result"]["outcome"] == {"outcome": "selected", "optionId": "reject_once"}
+        # Nothing left queued for a consumer that may not exist for hours.
+        while not queues["parent-session"].empty():
+            assert queues["parent-session"].get_nowait().id != 96
+    finally:
+        await _drain_audits(rt)
+        await _stop_reader(task)
+
+
+@pytest.mark.asyncio
+async def test_pending_non_prompt_request_does_not_enable_routing():
+    """A pending set_mode/steer/config request leaves an entry in
+    _routed_requests but proves nothing about a consuming prompt loop — a
+    child permission arriving then must be answered fail-closed, not parked
+    on a queue nobody reads."""
+    rt, reader, proc = _make_runtime()
+    _register(rt, "parent-session")
+    rt._routed_requests[5] = "parent-session"  # e.g. an unanswered set_mode
+    task = await _start_reader(rt)
+    try:
+        _feed(
+            reader,
+            {
+                "method": "_kiro.dev/subagent/list_update",
+                "params": {"subagents": [{"sessionId": "child-a"}]},
+            },
+        )
+        _feed(
+            reader,
+            {
+                "jsonrpc": "2.0",
+                "id": 97,
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": "child-a",
+                    "options": [
+                        {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"}
+                    ],
+                },
+            },
+        )
+        await _drain(reader)
+        await _drain_audits(rt)
+
+        frame = _last_written_frame(proc)
+        assert frame["id"] == 97
+        assert frame["result"]["outcome"] == {"outcome": "selected", "optionId": "reject_once"}
+    finally:
+        await _drain_audits(rt)
+        await _stop_reader(task)
+
+
+@pytest.mark.asyncio
+async def test_notice_yield_abandonment_clears_turn_state():
+    """The drain-time rejection notices are yields, i.e. abandonment points.
+    A consumer that closes the stream at a notice yield must not leave the
+    handle permanently turn-active (mark_turn_active leaked True /
+    _turn_done cleared) — the notice loop must live inside the same
+    try/finally as the dispatch loop."""
+    from kiro_crew.acp.types import EVENT_SUBAGENT_ACTIVITY
+
+    rt, _, _ = _make_runtime()
+    q = _register(rt, "sA")
+    handle = AcpSessionHandle("sA", q["sA"], rt)
+    rt.send_request = AsyncMock(return_value=7)
+    handle._pending_reject_notices.append(("child-a", "Running: sha256sum x"))
+
+    gen = handle.prompt("hi", timeout=3.0)
+    first = await gen.__anext__()
+    assert first.kind == EVENT_SUBAGENT_ACTIVITY
+    assert "auto-rejected" in (first.text or "")
+    # Consumer abandons the stream at the notice yield.
+    await gen.aclose()
+
+    assert handle.is_turn_active is False
+    assert "sA" not in rt._turn_active_sessions
+
+
+@pytest.mark.asyncio
+async def test_handle_owned_rejections_are_sel_audited():
+    """Every permission decision leaves a SEL record (repo convention). The
+    fail-close fidelity gate and the pre-turn drain answer requests that no
+    consumer ever sees, so the handle must emit the denial audit itself —
+    otherwise those rejections are invisible to SEL."""
+    import contextlib
+
+    rt, _, _ = _make_runtime()
+    q = _register(rt, "sA")
+    handle = AcpSessionHandle("sA", q["sA"], rt)
+
+    audited: list[tuple[object, str, str]] = []
+    handle._audit_handle_reject = (  # type: ignore[method-assign]
+        lambda request_id, title, error: audited.append((request_id, title, error))
+    )
+    rt.send_response = AsyncMock()
+
+    # Pre-turn drain path: a stranded permission request in the queue.
+    q["sA"].put_nowait(
+        JsonRpcMessage.from_dict(
+            {
+                "jsonrpc": "2.0",
+                "id": 55,
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": "child-a",
+                    "toolCall": {"toolCallId": "tc-9", "title": "Running: rm -rf x"},
+                    "options": [
+                        {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"}
+                    ],
+                },
+            }
+        )
+    )
+    rt.send_request = AsyncMock(return_value=9)
+    gen = handle.prompt("hi", timeout=0.2)
+    with contextlib.suppress(StopAsyncIteration, asyncio.TimeoutError, Exception):
+        await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    await gen.aclose()
+
+    assert audited, "pre-turn drain reject was not SEL-audited"
+    assert audited[0][2] == "stranded_request_pre_turn_drain"
+
+
+def test_missing_kind_is_not_a_resolved_shell_classification():
+    """A tool_call whose `kind` never arrived must NOT cache a shell
+    classification: the miss-default False would otherwise read as a RESOLVED
+    non-shell on the later permission frame (shell_classified=True), skipping
+    the low-fidelity downgrade without any classification having happened."""
+    from kiro_crew.acp._dispatch import _build_tool_call_event, build_permission_event
+    from kiro_crew.acp.types import METHOD_REQUEST_PERMISSION
+
+    shell_cache: dict[str, bool] = {}
+    raw_cache: dict[str, dict] = {}
+    # No `kind` key at all — classification unresolved.
+    _build_tool_call_event(
+        {"title": "Doing something", "toolCallId": "tc-nk", "rawInput": {"path": "/tmp/x"}},
+        None,
+        shell_cache=shell_cache,
+        raw_params_cache=raw_cache,
+    )
+    assert "tc-nk" not in shell_cache  # unresolved, NOT cached False
+
+    msg = JsonRpcMessage.from_dict(
+        {
+            "id": 7,
+            "method": METHOD_REQUEST_PERMISSION,
+            "params": {
+                "sessionId": "child-a",
+                "toolCall": {"toolCallId": "tc-nk", "title": "Doing something"},
+                "options": [],
+            },
+        }
+    )
+    event, _ = build_permission_event(
+        msg, shell_cache=shell_cache, raw_params_cache=raw_cache
+    )
+    event.sub_session_id = "child-a"
+    assert event.shell_classified is False
+    assert event.child_low_fidelity is True  # downgrade applies
+
+    # An explicit kind DOES resolve (even a non-shell one).
+    _build_tool_call_event(
+        {"title": "Reading", "kind": "read", "toolCallId": "tc-rk"},
+        None,
+        shell_cache=shell_cache,
+        raw_params_cache=raw_cache,
+    )
+    assert shell_cache.get("tc-rk") is False  # resolved non-shell
+
+
+def test_refinement_fills_raw_params_cache_for_following_permission():
+    """A tool_call_update refinement carrying rawInput must make the FOLLOWING
+    permission frame full-provenance (raw_params_trusted=True) — this is the
+    path that keeps backends streaming an empty initial rawInput out of the
+    low-fidelity downgrade. Pins the required frame ordering explicitly."""
+    from kiro_crew.acp._dispatch import build_permission_event, parse_session_update
+    from kiro_crew.acp.types import METHOD_REQUEST_PERMISSION
+
+    shell_cache: dict[str, bool] = {}
+    raw_cache: dict[str, dict] = {}
+    input_cache: dict[str, str] = {}
+    # Initial tool_call with EMPTY rawInput but a real kind.
+    parse_session_update(
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "tc-rf",
+            "title": "Running: sha256sum x",
+            "kind": "execute",
+        },
+        tool_input_cache=input_cache,
+        shell_cache=shell_cache,
+        raw_params_cache=raw_cache,
+    )
+    assert "tc-rf" not in raw_cache
+    # Refinement supplies the complete params.
+    parse_session_update(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "tc-rf",
+            "rawInput": {"command": "sha256sum x"},
+        },
+        tool_input_cache=input_cache,
+        shell_cache=shell_cache,
+        raw_params_cache=raw_cache,
+    )
+    assert raw_cache.get("tc-rf") == {"command": "sha256sum x"}
+
+    msg = JsonRpcMessage.from_dict(
+        {
+            "id": 8,
+            "method": METHOD_REQUEST_PERMISSION,
+            "params": {
+                "sessionId": "child-a",
+                "toolCall": {"toolCallId": "tc-rf", "title": "Running: sha256sum x"},
+                "options": [],
+            },
+        }
+    )
+    event, _ = build_permission_event(
+        msg, shell_cache=shell_cache, raw_params_cache=raw_cache
+    )
+    event.sub_session_id = "child-a"
+    assert event.raw_params_trusted is True
+    assert event.shell_classified is True
+    assert event.child_low_fidelity is False
+
+
+@pytest.mark.asyncio
+async def test_fidelity_unaware_consumer_gate_rejects_and_audits():
+    """The fail-close choke point protecting every non-dashboard consumer:
+    a low-fidelity child permission request reaching _dispatch_events on a
+    handle whose consumer never opted in must be REJECTED (answered, never
+    yielded as a permission event) and SEL-audited."""
+    from kiro_crew.acp.types import (
+        EVENT_PERMISSION_REQUEST,
+        METHOD_REQUEST_PERMISSION,
+    )
+
+    rt, reader, proc = _make_runtime()
+    q = _register(rt, "sA")
+    handle = AcpSessionHandle("sA", q["sA"], rt)
+    assert handle.child_fidelity_aware is False
+
+    audited: list[tuple[object, str, str]] = []
+    handle._audit_handle_reject = (  # type: ignore[method-assign]
+        lambda request_id, title, error: audited.append((request_id, title, error))
+    )
+
+    task = await _start_reader(rt)
+    try:
+        events = []
+
+        async def drive():
+            async for ev in handle.prompt("hi", timeout=3.0):
+                events.append(ev)
+
+        driver = asyncio.ensure_future(drive())
+        req_id = (await _await_routed(rt, "sA"))["sA"]
+        # Announce the child so the frame routes to the owner's queue.
+        _feed(
+            reader,
+            {
+                "method": "_kiro.dev/subagent/list_update",
+                "params": {"subagents": [{"sessionId": "child-a"}]},
+            },
+        )
+        # Child permission frame with NO preceding tool_call → low fidelity.
+        _feed(
+            reader,
+            {
+                "jsonrpc": "2.0",
+                "id": 77,
+                "method": METHOD_REQUEST_PERMISSION,
+                "params": {
+                    "sessionId": "child-a",
+                    "toolCall": {"toolCallId": "tc-77", "title": "Running: rm -rf /"},
+                    "options": [
+                        {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"}
+                    ],
+                },
+            },
+        )
+        _feed(reader, {"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+        await asyncio.wait_for(driver, timeout=5.0)
+
+        kinds = [ev.kind for ev in events]
+        assert EVENT_PERMISSION_REQUEST not in kinds  # never yielded
+        assert audited and audited[0][2] == "child_low_fidelity_unaware_consumer"
+        # The reject was actually SENT (answered, not dropped).
+        answer = None
+        for call in proc.stdin.write.call_args_list:
+            frame = json.loads(call.args[0].decode())
+            if frame.get("id") == 77 and "result" in frame:
+                answer = frame
+        assert answer is not None
+        assert answer["result"]["outcome"]["outcome"] in ("selected", "cancelled")
+    finally:
+        await _drain_audits(rt)
+        await _stop_reader(task)
