@@ -6239,7 +6239,7 @@
         "skill_md": "SKILL.md",
         "skills": "Skills",
         "auto_create_hint": "Kiro Crew can also draft skills from completed sessions automatically — off by default, controlled by <settingRef/>.",
-        "approval_required_hint": "Candidates wait here until you approve them — required by <settingRef/>."
+        "approval_required_hint": "Candidates wait here for your approval. Prose-only skills can go live automatically when <settingRef/> is off — skills that bundle scripts always require review."
       },
       "steeringTab": {
         "api_standards_md": "api-standards.md",

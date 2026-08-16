@@ -489,6 +489,11 @@ function PendingCandidateRow({ p, autoOpen, onApprove, onDismiss }: {
               <span className="ml-2 text-[10px] px-1.5 py-[1px] rounded-full bg-accent-subtle text-accent font-bold">{i18nT('pages.overview.skillsTab.update')}</span>
             )}
             {p.has_scripts && (
+              /* Plain badge: the always-requires-review explanation renders as
+                 visible text in the expanded panel (and the panel hint carries
+                 the same caveat), so a hover title here would be a third
+                 rendering of one sentence — and a tooltip BUTTON would be a
+                 fourth control in the row (AUTOSDE max-two-buttons-per-row). */
               <span className="ml-2 text-[10px] px-1.5 py-[1px] rounded-full bg-warn-subtle text-warn font-bold">{i18nT('pages.overview.skillsTab.script')}</span>
             )}
           </div>
@@ -508,6 +513,15 @@ function PendingCandidateRow({ p, autoOpen, onApprove, onDismiss }: {
       </div>
       {open && detail && (
         <div className="mt-2 space-y-2">
+          {p.has_scripts && (
+            /* Scripts are a hard security boundary: a script-bearing candidate
+               stages for manual review even with skills.approval_required off.
+               Without this note a user who disabled approval sees the row and
+               has no idea why the setting "didn't work". */
+            <div className="text-[11px] p-2 rounded bg-warn-subtle text-warn border border-border">
+              {i18nT('pages.overview.skillsTab.scripts_always_require_review')}
+            </div>
+          )}
           {isUpdate && detail.stale_base && (
             <div className="text-[11px] p-2 rounded bg-warn-subtle text-warn border border-border">
               {i18nT('pages.overview.skillsTab.this_skill_changed_after_this_update_was_written')}

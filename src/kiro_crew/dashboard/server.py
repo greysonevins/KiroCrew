@@ -1995,6 +1995,82 @@ def _arm_prevent_sleep_poll(state: DashboardState) -> None:
     state._prevent_sleep_task = task  # prevent GC; cancelled on cleanup
 
 
+# Deep link at the approval toggle itself (Settings -> Skills, highlighted), so
+# the notification can offer the opt-out at the exact moment the user is being
+# asked to review yet another candidate. Same highlight=key:<configKey> format
+# the frontend's <SettingRef> builds, consumed by useSettingHighlight.
+_SKILL_APPROVAL_SETTING_URL = "/settings?tab=skills&highlight=key:skills.approval_required"
+
+
+def _pending_skill_notification(info: dict) -> tuple[str, str, str, list[dict[str, str]]]:
+    """Build the bell-feed payload for a staged skill candidate.
+
+    Returns ``(title, body, review_url, actions)``. Module-level (rather than
+    inline in the staged hook) so the notification CONTENT is unit-testable
+    without booting the dashboard app.
+    """
+    name = str(info.get("name") or info.get("slug") or "skill")
+    slug = str(info.get("slug") or "")
+    is_update = info.get("kind") == "update"
+    target = str(info.get("target") or "")
+    description = str(info.get("description") or "").strip()
+    triggers = str(info.get("triggers") or "").strip()
+    subject = target or name if is_update else name
+    title = "Skill update awaiting review" if is_update else "New skill awaiting review"
+    # The body LEADS with name + description because the feed row
+    # renders only its first ~80 characters, stripped to one line.
+    # The title already says a skill is awaiting review, so opening
+    # with "was generated from a session and needs your approval"
+    # spends exactly the characters that decide whether the reader
+    # opens the queue on words they have already read. Identity plus
+    # purpose first; the approval sentence still follows for the
+    # detail panel, which renders the whole body as markdown.
+    head = f"**{subject}**"
+    if description:
+        head += f" — {description}"
+    lines = [head]
+    lines.append(
+        "\nGenerated from a session. Needs your approval before "
+        + ("it takes effect." if is_update else "it can be used.")
+    )
+    if triggers:
+        lines.append(f"\n**Triggers:** {triggers}")
+    if info.get("has_scripts"):
+        lines.append("\n_Bundles executable scripts — review them before approving._")
+    body = "\n".join(lines)
+    # Deep-link straight at the candidate, not just the tab: the
+    # queue can hold several rows, and "go find it" is the failure
+    # mode this notification exists to prevent. quote() keeps a slug
+    # from opening a second query parameter -- slugs are validated
+    # against a restrictive pattern upstream, but the URL is built
+    # here and must not depend on that invariant holding.
+    review_url = "/capabilities?tab=skills"
+    if slug:
+        review_url += f"&review={quote(slug, safe='')}"
+    actions = [
+        {
+            "id": "review-skill",
+            "label": "Review update" if is_update else "Review skill",
+            "url": review_url,
+        },
+        # The opt-out shortcut: lands on the approval_required toggle in
+        # Settings. Offered on every staged candidate — including
+        # script-bearing ones, where it still governs FUTURE prose-only
+        # skills (scripts always stage; the setting's own description
+        # explains that boundary). The label shares the destination
+        # toggle's polarity ("Require approval …" is ON; this stops it),
+        # and the trailing ellipsis signals that the button NAVIGATES to a
+        # settings page rather than flipping the setting itself —
+        # notification actions are navigation-only.
+        {
+            "id": "auto-approve-skills",
+            "label": "Stop requiring skill approval…",
+            "url": _SKILL_APPROVAL_SETTING_URL,
+        },
+    ]
+    return title, body, review_url, actions
+
+
 async def start_dashboard(
     sessions: SessionManager,
     crons: CronService,
@@ -2089,56 +2165,15 @@ async def start_dashboard(
 
         def _on_pending_skill_staged(info: dict) -> None:
             try:
-                name = str(info.get("name") or info.get("slug") or "skill")
                 slug = str(info.get("slug") or "")
                 is_update = info.get("kind") == "update"
                 target = str(info.get("target") or "")
-                description = str(info.get("description") or "").strip()
-                triggers = str(info.get("triggers") or "").strip()
-                subject = target or name if is_update else name
-                title = "Skill update awaiting review" if is_update else "New skill awaiting review"
-                # The body LEADS with name + description because the feed row
-                # renders only its first ~80 characters, stripped to one line.
-                # The title already says a skill is awaiting review, so opening
-                # with "was generated from a session and needs your approval"
-                # spends exactly the characters that decide whether the reader
-                # opens the queue on words they have already read. Identity plus
-                # purpose first; the approval sentence still follows for the
-                # detail panel, which renders the whole body as markdown.
-                head = f"**{subject}**"
-                if description:
-                    head += f" — {description}"
-                lines = [head]
-                lines.append(
-                    "\nGenerated from a session. Needs your approval before "
-                    + ("it takes effect." if is_update else "it can be used.")
-                )
-                if triggers:
-                    lines.append(f"\n**Triggers:** {triggers}")
-                if info.get("has_scripts"):
-                    lines.append("\n_Bundles executable scripts — review them before approving._")
-                body = "\n".join(lines)
+                title, body, review_url, actions = _pending_skill_notification(info)
                 payload = {
                     "slug": slug,
                     "candidate_kind": "update" if is_update else "new",
                     "target": target,
                 }
-                # Deep-link straight at the candidate, not just the tab: the
-                # queue can hold several rows, and "go find it" is the failure
-                # mode this notification exists to prevent. quote() keeps a slug
-                # from opening a second query parameter -- slugs are validated
-                # against a restrictive pattern upstream, but the URL is built
-                # here and must not depend on that invariant holding.
-                review_url = "/capabilities?tab=skills"
-                if slug:
-                    review_url += f"&review={quote(slug, safe='')}"
-                actions = [
-                    {
-                        "id": "review-skill",
-                        "label": "Review" if is_update else "Review skill",
-                        "url": review_url,
-                    }
-                ]
 
                 def _emit() -> None:
                     try:

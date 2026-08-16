@@ -9431,7 +9431,8 @@
         "version_range": "(v{{from}} → v{{to}})",
         "workspace": "espacio de trabajo",
         "auto_create_hint": "Kiro Crew también puede crear borradores de habilidades a partir de sesiones completadas automáticamente — desactivado por defecto, controlado por <settingRef/>.",
-        "approval_required_hint": "Los candidatos esperan aquí hasta que los apruebes — requerido por <settingRef/>."
+        "approval_required_hint": "Los candidatos esperan aquí tu aprobación. Las habilidades de solo prosa pueden publicarse automáticamente cuando <settingRef/> está desactivado — las habilidades que incluyen scripts siempre requieren revisión.",
+        "scripts_always_require_review": "Los scripts incluidos siempre requieren revisión manual, incluso cuando la aprobación de habilidades está desactivada."
       },
       "steeringTab": {
         "always_on_markdown_conventions_injected_into_eve": "Convenciones markdown siempre activas que se inyectan en cada sesión. Los archivos globales están en ~/.kiro/steering y aplican en todas partes; los archivos del espacio de trabajo están en <project>/.kiro/steering y aplican solo a ese proyecto.",

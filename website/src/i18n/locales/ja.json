@@ -9201,7 +9201,8 @@
         "version_range": "(v{{from}} → v{{to}})",
         "workspace": "ワークスペース",
         "auto_create_hint": "Kiro Crewは完了したセッションからスキルを自動的に下書きすることもできます — デフォルトでオフ、<settingRef/>で制御されます。",
-        "approval_required_hint": "候補はあなたが承認するまでここで待機します — <settingRef/>で必須です。"
+        "approval_required_hint": "候補はここで承認を待ちます。<settingRef/> がオフの場合、スクリプトを含まないスキルは自動的に公開できます — スクリプトを含むスキルは常にレビューが必要です。",
+        "scripts_always_require_review": "バンドルされたスクリプトは、スキルの承認をオフにしていても常に手動レビューが必要です。"
       },
       "steeringTab": {
         "always_on_markdown_conventions_injected_into_eve": "常にすべてのセッションに注入される Markdown 規約。グローバルファイルは ~/.kiro/steering にあり、すべての場所に適用されます; ワークスペースファイルは <project>/.kiro/steering にあり、そのプロジェクトにのみ適用されます。",

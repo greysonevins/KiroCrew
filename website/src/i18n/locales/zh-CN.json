@@ -9201,7 +9201,8 @@
         "version_range": "(v{{from}} → v{{to}})",
         "workspace": "工作区",
         "auto_create_hint": "Kiro Crew 还可以从已完成的会话中自动起草技能 — 默认关闭，由 <settingRef/> 控制。",
-        "approval_required_hint": "候选项在此等待你的批准 — 由 <settingRef/> 要求。"
+        "approval_required_hint": "候选技能在此等待你的批准。当 <settingRef/> 关闭时，纯文本技能可以自动发布 — 包含脚本的技能始终需要审查。",
+        "scripts_always_require_review": "捆绑的脚本始终需要人工审查，即使已关闭技能审批。"
       },
       "steeringTab": {
         "always_on_markdown_conventions_injected_into_eve": "注入到每个会话的常开 markdown 约定。全局文件位于 ~/.kiro/steering，在所有位置生效；工作区文件位于 <project>/.kiro/steering，仅对相应项目生效。",

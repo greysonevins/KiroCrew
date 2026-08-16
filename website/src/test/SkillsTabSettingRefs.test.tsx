@@ -5,7 +5,7 @@
  * generated SETTINGS_REGISTRY.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
+import { render, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -19,6 +19,7 @@ const mockApi = vi.hoisted(() => ({
   updateSkill: vi.fn(),
   deleteSkill: vi.fn(),
   skillsPending: vi.fn(),
+  skillPendingDetail: vi.fn(),
   approveSkill: vi.fn(),
   dismissSkill: vi.fn(),
 }))
@@ -92,6 +93,61 @@ describe('SkillsTab SettingRef call sites', () => {
       })
       expect(settingLink, 'expected SettingRef chip for skills.approval_required to render as an anchor (ui mode)').not.toBeNull()
       expect(settingLink!.textContent).toContain('skills.approval_required')
+    })
+  })
+
+  it('pending panel hint surfaces the auto-approve opt-out and the script caveat', async () => {
+    mockApi.skills.mockResolvedValue([
+      { key: 'existing', name: 'existing', description: 'a skill', source: 'kirocrew', loaded_by_agents: [] },
+    ])
+    mockApi.skillsPending.mockResolvedValue({
+      pending: [{ slug: 'test-candidate', name: 'Test Candidate', description: 'a candidate', has_scripts: false, created: Date.now() }],
+    })
+
+    const { container } = renderTab()
+
+    await waitFor(() => {
+      // The hint must SAY prose-only skills can auto-publish via the setting —
+      // the discoverability gap in #3927 was a link labelled only "required
+      // by", which reads as immutable fact rather than an opt-out. Wording is
+      // state-neutral ("when ... is off") so it stays true whether the user
+      // already disabled approval or not.
+      expect(container.textContent).toContain('can go live automatically when')
+      expect(container.textContent).toContain('skills that bundle scripts always require review')
+    })
+  })
+
+  it('script-bearing candidates carry the always-requires-review explanation', async () => {
+    mockApi.skills.mockResolvedValue([
+      { key: 'existing', name: 'existing', description: 'a skill', source: 'kirocrew', loaded_by_agents: [] },
+    ])
+    mockApi.skillsPending.mockResolvedValue({
+      pending: [
+        { slug: 'prose-only', name: 'Prose Only', description: 'no scripts', has_scripts: false, created: Date.now() },
+        { slug: 'with-scripts', name: 'With Scripts', description: 'bundles a script', has_scripts: true, created: Date.now() },
+      ],
+    })
+    mockApi.skillPendingDetail.mockResolvedValue({
+      name: 'With Scripts',
+      content: '---\nname: with-scripts\n---\nbody',
+      scripts: [{ filename: 'run.sh', content: 'echo hi' }],
+    })
+
+    const { container, getAllByText } = renderTab()
+
+    // Collapsed: the badge is a plain marker; the explanation is NOT hidden
+    // behind hover (no title) — it renders as visible text once expanded.
+    await waitFor(() => {
+      expect(getAllByText('script')).toHaveLength(1)
+      expect(container.textContent).not.toContain('Bundled scripts always require manual review')
+    })
+
+    // Expanded row: the explanation renders as visible text.
+    const reviewBtns = getAllByText('Review')
+    // The script-bearing row is second in the fixture; open it.
+    fireEvent.click(reviewBtns[1])
+    await waitFor(() => {
+      expect(container.textContent).toContain('Bundled scripts always require manual review')
     })
   })
 })
