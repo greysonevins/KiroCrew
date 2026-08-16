@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import re as _re
+import shutil
 import stat as _stat
 import threading
 import uuid
@@ -485,6 +486,46 @@ def config_path() -> Path:
 def config_local_path() -> Path:
     """Return path to config.local.json — user overrides that survive upgrades."""
     return config_dir() / "config.local.json"
+
+
+def _write_migration_backup(path: Path) -> None:
+    """Copy the pre-migration config aside, but ONLY inside our own data home.
+
+    ``load()`` reads whatever ``config_path()`` resolves to, and callers can
+    redirect that at a file they own — tests and embedders point it at a
+    ``tempfile`` entry in the shared ``TMPDIR``. Writing ``<path>.bak`` beside
+    such a path leaks a file nobody collects: the caller unlinks the path it
+    created and never learns a sibling appeared. One dev host accumulated 72k
+    orphaned ``tmpXXXXXXXX.json.bak`` files this way, 7% of a tmpfs inode
+    budget whose exhaustion fails every process on the box.
+
+    So the copy is gated on the config living in ``config_dir()``, the one
+    directory whose contents we own. In production that is always true
+    (``config_path()`` is ``config_dir() / "config.json"``), which keeps the
+    real backup exactly where it has always been; for a redirected path we
+    write nothing rather than litter a directory belonging to someone else.
+
+    Only the LOCATION decision is contained here. A failing copy still
+    propagates, because the caller's ``except`` is what skips the migration
+    ``save()`` -- so a config we could not copy aside is not rewritten either,
+    and the migration retries on the next load.
+    """
+    try:
+        inside_data_home = path.parent.resolve() == config_dir().resolve()
+    except OSError:
+        # Containment is unprovable (symlink loop, vanished parent): treat the
+        # path as foreign, since writing on a failed check is the worse error.
+        inside_data_home = False
+    if not inside_data_home:
+        # info, not debug: the migration save that follows rewrites this
+        # caller-owned file in place, and that now happens with no backup.
+        logger.info("Config migrated; no backup written for %s (outside the data home)", path)
+        return
+    # NOT with_suffix(".json.bak"): that REPLACES the final suffix, so a
+    # config path which is not *.json would be renamed rather than backed up.
+    backup = Path(str(path) + ".bak")
+    shutil.copy2(path, backup)
+    logger.info("Config migrated — backup saved to %s", backup)
 
 
 def denied_commands_path() -> Path:
@@ -6682,14 +6723,7 @@ class KiroCrewConfig:
                 needs_migration = True
 
             if needs_migration:
-                backup = path.with_suffix(".json.bak")
-                import shutil
-
-                shutil.copy2(path, backup)
-                logger.info(
-                    "Config migrated — backup saved to %s",
-                    backup,
-                )
+                _write_migration_backup(path)
                 cfg.save()
         except Exception as e:
             # Migration write-back is best-effort; never block startup.

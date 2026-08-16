@@ -4,6 +4,21 @@ All notable changes to KiroCrew are documented in this file.
 
 ## [Unreleased]
 
+- **The one-time config migration no longer leaves a `.json.bak` orphan beside a
+  config path it does not own.** `KiroCrewConfig.load()` copied the
+  pre-migration config to `<path>.bak`, where `<path>` is whatever
+  `config_path()` resolved to -- so every caller that redirects the loader at
+  its own `tempfile` entry (tests and embedders do) silently accumulated one
+  orphan per load, since the caller unlinks the path it created and never learns
+  a sibling appeared. One dev host reached 72,327 such files in `/tmp`, 7% of a
+  tmpfs inode budget whose exhaustion fails every process on the box. The copy
+  is now gated on the config living in `config_dir()`, the one directory whose
+  contents we own; the production backup is unchanged, and a copy that fails
+  still aborts the migration save exactly as before, so a config we could not
+  copy aside is not rewritten either. The name is also built by
+  appending rather than `with_suffix(".json.bak")`, which REPLACED the final
+  suffix and so renamed a non-`*.json` config instead of backing it up.
+
 - **A knowledge source that errored during ingestion is no longer re-synced on
   every sweep.** `KnowledgeIngestion` marks failure in the `sync_status`
   **column**, but `SyncScheduler.sync_all`'s skip predicate read only the

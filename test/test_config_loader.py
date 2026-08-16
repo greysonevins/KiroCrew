@@ -4846,3 +4846,99 @@ class TestUpdateConfigLocked:
 
         assert result == {"repaired": True}
         assert json.loads(cfg.read_text()) == {"repaired": True}
+
+
+class TestMigrationBackupContainment:
+    """``load()`` must not create files beside a config path it does not own.
+
+    The one-time agents migration copies the pre-migration config aside. The
+    copy landed next to whatever ``config_path()`` resolved to, so every caller
+    that redirects the loader at its own temp file (this module's own helpers do
+    exactly that) silently accumulated a ``<tmpname>.json.bak`` orphan it never
+    cleaned up -- 72k of them on one dev host, against a tmpfs inode cap.
+    """
+
+    # A config with neither "agents" nor "default_agent" is what makes
+    # load() take the migration write-back branch that writes the backup.
+    _LEGACY = {"telegram": {"allow_forum": True}}
+
+    def _load_with(self, home: Path, cfg_file: Path) -> KiroCrewConfig:
+        with unittest.mock.patch(
+            "kiro_crew.config.loader.config_dir", return_value=home
+        ), unittest.mock.patch(
+            "kiro_crew.config.loader.config_path", return_value=cfg_file
+        ):
+            return KiroCrewConfig.load()
+
+    def test_no_sibling_left_beside_a_redirected_config(self, tmp_path: Path) -> None:
+        """A caller-owned directory gains nothing from a migrating load()."""
+        caller_dir = tmp_path / "caller-owned"
+        caller_dir.mkdir()
+        cfg_file = caller_dir / "tmpdeadbeef.json"
+        cfg_file.write_text(json.dumps(self._LEGACY), encoding="utf-8")
+        home = tmp_path / "home"
+        home.mkdir()
+
+        before = {p.name for p in caller_dir.iterdir()}
+        cfg = self._load_with(home, cfg_file)
+        after = {p.name for p in caller_dir.iterdir()}
+
+        # Guard the guard: assert the migration branch actually ran, otherwise
+        # this test would pass for the wrong reason if that branch stops firing.
+        assert cfg.agents, "migration write-back did not run, test is vacuous"
+        assert after == before, (
+            "load() left orphans beside the caller's config: %s" % sorted(after - before)
+        )
+
+    def test_real_config_in_the_data_home_is_still_backed_up(self, tmp_path: Path) -> None:
+        """The production path keeps its backup exactly where it always was."""
+        home = tmp_path / "home"
+        home.mkdir()
+        cfg_file = home / "config.json"
+        cfg_file.write_text(json.dumps(self._LEGACY), encoding="utf-8")
+
+        cfg = self._load_with(home, cfg_file)
+
+        assert cfg.agents, "migration write-back did not run, test is vacuous"
+        assert (home / "config.json.bak").exists()
+
+    def test_backup_appends_the_suffix_instead_of_replacing_it(self, tmp_path: Path) -> None:
+        """A config whose name is not ``*.json`` is backed up, not renamed.
+
+        ``Path.with_suffix(".json.bak")`` REPLACES the final suffix, so
+        ``settings.conf`` would have produced ``settings.json.bak``.
+        """
+        home = tmp_path / "home"
+        home.mkdir()
+        cfg_file = home / "settings.conf"
+        cfg_file.write_text(json.dumps(self._LEGACY), encoding="utf-8")
+
+        self._load_with(home, cfg_file)
+
+        assert (home / "settings.conf.bak").exists()
+        assert not (home / "settings.json.bak").exists()
+
+    def test_failed_backup_still_aborts_the_migration_save(self, tmp_path: Path) -> None:
+        """A config we could not copy aside is not rewritten either.
+
+        The caller's ``except`` is what skips ``cfg.save()``, so containing the
+        LOCATION decision must not also swallow a failing copy: otherwise the
+        only pre-migration copy is overwritten with no backup anywhere.
+        """
+        home = tmp_path / "home"
+        home.mkdir()
+        cfg_file = home / "config.json"
+        original = json.dumps(self._LEGACY)
+        cfg_file.write_text(original, encoding="utf-8")
+
+        with unittest.mock.patch(
+            "kiro_crew.config.loader.shutil.copy2",
+            side_effect=OSError("backup target is read-only"),
+        ):
+            cfg = self._load_with(home, cfg_file)
+
+        # load() still returns a usable config -- the write-back is best-effort.
+        assert cfg.agents
+        # But the on-disk config is untouched, so the migration retries next load.
+        assert json.loads(cfg_file.read_text(encoding="utf-8")) == json.loads(original)
+        assert not (home / "config.json.bak").exists()
